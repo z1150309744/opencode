@@ -50,6 +50,17 @@ function extract(messages: MessageV2.WithParts[]) {
 }
 
 export interface Interface {
+  //   1. claims 的用途：记录每个消息 ID 已经附加了哪些指令文件（如
+  //   AGENTS.md、CLAUDE.md、CONTEXT.md）。当 resolve
+  //   方法从文件目录向上遍历查找指令文件时，会检查 claims
+  //   来去重，确保同一个指令文件不会对同一条消息重复附加。
+  //   2. clear 做了什么：从 claims Map 中删除该 messageID 对应的整个 Set<string>
+  //   条目。这意味着释放该消息的指令文件占用记录。
+  //   3. 为什么需要清理：claims 是一个持久化在 InstanceState
+  //   中的内存状态。如果不清理，随着消息不断创建，这个 Map
+  //   会无限增长，造成内存泄漏。而且已经处理完的消息不再需要去重追踪，清理掉是合理的。
+  //
+  //   简单来说，clear 就是一个内存清理操作，删除该消息不再需要的指令文件去重记录。
   readonly clear: (messageID: MessageID) => Effect.Effect<void>
   readonly systemPaths: () => Effect.Effect<Set<string>, AppFileSystem.Error>
   readonly system: () => Effect.Effect<string[], AppFileSystem.Error>

@@ -116,39 +116,65 @@ function getForkedTitle(title: string): string {
 
 export const Info = z
   .object({
+    // 会话唯一标识符
     id: SessionID.zod,
+    // 会话短标识，用于 URL 友好的标识
     slug: z.string(),
+    // 所属项目 ID
     projectID: ProjectID.zod,
+    // 所属工作区 ID（可选，多工作区模式下使用）
     workspaceID: WorkspaceID.zod.optional(),
+    // 会话创建时所在的工作目录路径
     directory: z.string(),
+    // 父会话 ID（可选，子会话/分支会话时指向父会话）
     parentID: SessionID.zod.optional(),
+    // 会话代码变更摘要（可选）
     summary: z
       .object({
+        // 新增行数
         additions: z.number(),
+        // 删除行数
         deletions: z.number(),
+        // 变更文件数
         files: z.number(),
+        // 文件级别的 diff 详情（可选）
         diffs: Snapshot.FileDiff.array().optional(),
       })
       .optional(),
+    // 会话分享信息（可选）
     share: z
       .object({
+        // 分享链接 URL
         url: z.string(),
       })
       .optional(),
+    // 会话标题
     title: z.string(),
+    // 创建会话时的应用版本号
     version: z.string(),
+    // 时间戳信息
     time: z.object({
+      // 创建时间（毫秒时间戳）
       created: z.number(),
+      // 最后更新时间（毫秒时间戳）
       updated: z.number(),
+      // 正在压缩的时间（可选，上下文压缩进行中时设置）
       compacting: z.number().optional(),
+      // 归档时间（可选，会话被归档时设置）
       archived: z.number().optional(),
     }),
+    // 会话级别的权限规则集（可选，控制工具的允许/拒绝）
     permission: Permission.Ruleset.zod.optional(),
+    // 回退信息（可选，用于撤销会话中的代码变更）
     revert: z
       .object({
+        // 回退到的目标消息 ID
         messageID: MessageID.zod,
+        // 回退到的目标 part ID（可选）
         partID: PartID.zod.optional(),
+        // 回退前的快照标识（可选）
         snapshot: z.string().optional(),
+        // 回退产生的 diff 内容（可选）
         diff: z.string().optional(),
       })
       .optional(),

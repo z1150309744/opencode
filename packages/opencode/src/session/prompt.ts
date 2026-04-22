@@ -961,6 +961,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         id: part.id ? PartID.make(part.id) : PartID.ascending(),
       })
 
+      // 将用户输入的一个 Part 解析展开为一个或多个 Draft Part，供 LLM消费
       const resolvePart: (part: PromptInput["parts"][number]) => Effect.Effect<Draft<MessageV2.Part>[]> = Effect.fn(
         "SessionPrompt.resolveUserPart",
       )(function* (part) {
@@ -1702,25 +1703,38 @@ export const defaultLayer = Layer.suspend(() =>
   ),
 )
 export const PromptInput = z.object({
+  // 会话 ID，标识当前对话
   sessionID: SessionID.zod,
+  // 消息 ID（可选），不传则自动生成递增 ID
   messageID: MessageID.zod.optional(),
+  // 模型信息（可选），不传则回退到 agent 配置的模型 -> 上次会话使用的模型
   model: z
     .object({
+      // 提供者 ID，如 "anthropic"、"openai"
       providerID: ProviderID.zod,
+      // 模型 ID，如 "claude-sonnet-4-20250514"
       modelID: ModelID.zod,
     })
     .optional(),
+  // agent 名称（可选），如 "build"、"plan"，不传则使用默认 agent
   agent: z.string().optional(),
+  // 是否不需要 AI 回复，true = 只创建用户消息存入 DB，不触发 LLM 循环
   noReply: z.boolean().optional(),
+  // 工具启用/禁用映射（已废弃，现在通过 session permission 控制）
   tools: z
     .record(z.string(), z.boolean())
     .optional()
     .describe("@deprecated tools and permissions have been merged, you can set permissions on the session itself now"),
+  // 输出格式（可选），"text" 或 "json_schema"，json_schema 模式下强制模型返回结构化 JSON
   format: MessageV2.Format.optional(),
+  // 自定义系统提示词（可选），会追加到系统消息中
   system: z.string().optional(),
+  // 模型变体标识（可选），如 "thinking" 等不同配置变体
   variant: z.string().optional(),
+  // 消息内容部分，支持四种类型；messageID/sessionID 由后端自动填充，id 可选自动生成
   parts: z.array(
     z.discriminatedUnion("type", [
+      // 文本部分 -- 用户输入的文本内容
       MessageV2.TextPart.omit({
         messageID: true,
         sessionID: true,
@@ -1731,6 +1745,7 @@ export const PromptInput = z.object({
         .meta({
           ref: "TextPartInput",
         }),
+      // 文件部分 -- 附件（图片、代码文件、目录等）
       MessageV2.FilePart.omit({
         messageID: true,
         sessionID: true,
@@ -1741,6 +1756,7 @@ export const PromptInput = z.object({
         .meta({
           ref: "FilePartInput",
         }),
+      // Agent 部分 -- @agent 引用，触发 task 子任务调用指定 agent
       MessageV2.AgentPart.omit({
         messageID: true,
         sessionID: true,
@@ -1751,6 +1767,7 @@ export const PromptInput = z.object({
         .meta({
           ref: "AgentPartInput",
         }),
+      // 子任务部分 -- 由命令系统生成的子任务定义
       MessageV2.SubtaskPart.omit({
         messageID: true,
         sessionID: true,

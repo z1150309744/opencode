@@ -26,24 +26,40 @@ import * as OtelTracer from "@effect/opentelemetry/Tracer"
 
 export const Info = z
   .object({
+    // Agent 名称，如 "build"、"plan"、"explore"、"general"
     name: z.string(),
+    // Agent 描述（可选），说明该 Agent 的用途和使用场景
     description: z.string().optional(),
+    // Agent 模式："subagent" 子代理 | "primary" 主代理 | "all" 两者皆可
     mode: z.enum(["subagent", "primary", "all"]),
+    // 是否为内置原生 Agent（可选），true 表示系统预定义的 Agent
     native: z.boolean().optional(),
+    // 是否隐藏（可选），true 则不在 Agent 列表中显示给用户
     hidden: z.boolean().optional(),
+    // Top-P 采样参数（可选），控制生成文本的多样性
     topP: z.number().optional(),
+    // 温度参数（可选），值越高生成越随机，值越低越确定
     temperature: z.number().optional(),
+    // Agent 显示颜色（可选），用于 UI 中区分不同 Agent
     color: z.string().optional(),
+    // 权限规则集，控制该 Agent 可使用的工具和操作
     permission: Permission.Ruleset.zod,
+    // 绑定的模型（可选），不指定则使用默认模型
     model: z
       .object({
+        // 模型 ID，如 "claude-sonnet-4-20250514"
         modelID: ModelID.zod,
+        // 提供者 ID，如 "anthropic"、"openai"
         providerID: ProviderID.zod,
       })
       .optional(),
+    // 模型变体标识（可选），如 "thinking" 等不同配置变体
     variant: z.string().optional(),
+    // 自定义系统提示词（可选），覆盖 Agent 的默认提示词
     prompt: z.string().optional(),
+    // 额外配置选项，键值对形式的自定义参数
     options: z.record(z.string(), z.any()),
+    // 最大执行步数（可选），限制 Agent 在单次循环中的最大迭代次数
     steps: z.number().int().positive().optional(),
   })
   .meta({

@@ -85,13 +85,18 @@ export const Format = z.discriminatedUnion("type", [OutputFormatText, OutputForm
 export type OutputFormat = z.infer<typeof Format>
 
 const PartBase = z.object({
+  // Part 唯一标识符
   id: PartID.zod,
+  // 所属会话 ID
   sessionID: SessionID.zod,
+  // 所属消息 ID
   messageID: MessageID.zod,
 })
 
 export const SnapshotPart = PartBase.extend({
+  // 类型标识：快照
   type: z.literal("snapshot"),
+  // 快照标识符，用于记录某一时刻的代码状态
   snapshot: z.string(),
 }).meta({
   ref: "SnapshotPart",
@@ -99,8 +104,11 @@ export const SnapshotPart = PartBase.extend({
 export type SnapshotPart = z.infer<typeof SnapshotPart>
 
 export const PatchPart = PartBase.extend({
+  // 类型标识：补丁
   type: z.literal("patch"),
+  // 补丁的哈希值
   hash: z.string(),
+  // 受影响的文件路径列表
   files: z.string().array(),
 }).meta({
   ref: "PatchPart",
@@ -108,16 +116,24 @@ export const PatchPart = PartBase.extend({
 export type PatchPart = z.infer<typeof PatchPart>
 
 export const TextPart = PartBase.extend({
+  // 类型标识：文本
   type: z.literal("text"),
+  // 文本内容
   text: z.string(),
+  // 是否为系统合成的文本（可选），true 表示非用户直接输入，如系统提示、工具说明等
   synthetic: z.boolean().optional(),
+  // 是否被忽略（可选），true 则不会发送给模型
   ignored: z.boolean().optional(),
+  // 时间范围（可选），记录文本流式生成的起止时间
   time: z
     .object({
+      // 开始时间（毫秒时间戳）
       start: z.number(),
+      // 结束时间（可选，毫秒时间戳）
       end: z.number().optional(),
     })
     .optional(),
+  // 附加元数据（可选），键值对形式的额外信息
   metadata: z.record(z.string(), z.any()).optional(),
 }).meta({
   ref: "TextPart",
@@ -125,11 +141,17 @@ export const TextPart = PartBase.extend({
 export type TextPart = z.infer<typeof TextPart>
 
 export const ReasoningPart = PartBase.extend({
+  // 类型标识：推理/思考
   type: z.literal("reasoning"),
+  // 模型的推理/思考文本内容（如 Claude 的 extended thinking）
   text: z.string(),
+  // 附加元数据（可选）
   metadata: z.record(z.string(), z.any()).optional(),
+  // 推理过程的时间范围
   time: z.object({
+    // 开始时间（毫秒时间戳）
     start: z.number(),
+    // 结束时间（可选，毫秒时间戳）
     end: z.number().optional(),
   }),
 }).meta({
@@ -138,10 +160,14 @@ export const ReasoningPart = PartBase.extend({
 export type ReasoningPart = z.infer<typeof ReasoningPart>
 
 const FilePartSourceBase = z.object({
+  // 源文件中选中的文本片段信息
   text: z
     .object({
+      // 选中的文本内容
       value: z.string(),
+      // 选中的起始位置（字符偏移）
       start: z.number().int(),
+      // 选中的结束位置（字符偏移）
       end: z.number().int(),
     })
     .meta({
@@ -150,25 +176,35 @@ const FilePartSourceBase = z.object({
 })
 
 export const FileSource = FilePartSourceBase.extend({
+  // 来源类型：文件
   type: z.literal("file"),
+  // 文件路径
   path: z.string(),
 }).meta({
   ref: "FileSource",
 })
 
 export const SymbolSource = FilePartSourceBase.extend({
+  // 来源类型：代码符号（如函数、类等）
   type: z.literal("symbol"),
+  // 符号所在文件路径
   path: z.string(),
+  // 符号在文件中的位置范围（行列信息）
   range: LSP.Range,
+  // 符号名称
   name: z.string(),
+  // 符号类型（LSP SymbolKind 枚举值，如 1=File, 5=Class, 6=Method, 12=Function 等）
   kind: z.number().int(),
 }).meta({
   ref: "SymbolSource",
 })
 
 export const ResourceSource = FilePartSourceBase.extend({
+  // 来源类型：MCP 资源
   type: z.literal("resource"),
+  // MCP 客户端名称
   clientName: z.string(),
+  // MCP 资源 URI
   uri: z.string(),
 }).meta({
   ref: "ResourceSource",
@@ -179,10 +215,15 @@ export const FilePartSource = z.discriminatedUnion("type", [FileSource, SymbolSo
 })
 
 export const FilePart = PartBase.extend({
+  // 类型标识：文件附件
   type: z.literal("file"),
+  // MIME 类型，如 "image/png"、"text/plain"、"application/x-directory"
   mime: z.string(),
+  // 文件名（可选）
   filename: z.string().optional(),
+  // 文件内容 URL（file:// 本地路径或 data: base64 编码）
   url: z.string(),
+  // 文件来源信息（可选），记录文件/符号/MCP资源的原始位置
   source: FilePartSource.optional(),
 }).meta({
   ref: "FilePart",
@@ -190,12 +231,18 @@ export const FilePart = PartBase.extend({
 export type FilePart = z.infer<typeof FilePart>
 
 export const AgentPart = PartBase.extend({
+  // 类型标识：Agent 引用（用户通过 @agent 引用）
   type: z.literal("agent"),
+  // 引用的 Agent 名称
   name: z.string(),
+  // 引用在原始输入中的位置（可选）
   source: z
     .object({
+      // @agent 的原始文本
       value: z.string(),
+      // 起始字符偏移
       start: z.number().int(),
+      // 结束字符偏移
       end: z.number().int(),
     })
     .optional(),
@@ -205,9 +252,13 @@ export const AgentPart = PartBase.extend({
 export type AgentPart = z.infer<typeof AgentPart>
 
 export const CompactionPart = PartBase.extend({
+  // 类型标识：上下文压缩
   type: z.literal("compaction"),
+  // 是否为自动触发的压缩（true = token 超限自动触发，false = 用户手动触发）
   auto: z.boolean(),
+  // 是否因为上下文溢出而触发（可选）
   overflow: z.boolean().optional(),
+  // 压缩后保留的尾部消息起始 ID（可选），用于保留最近的未压缩消息
   tail_start_id: MessageID.zod.optional(),
 }).meta({
   ref: "CompactionPart",
@@ -215,16 +266,24 @@ export const CompactionPart = PartBase.extend({
 export type CompactionPart = z.infer<typeof CompactionPart>
 
 export const SubtaskPart = PartBase.extend({
+  // 类型标识：子任务
   type: z.literal("subtask"),
+  // 子任务的提示词内容
   prompt: z.string(),
+  // 子任务描述
   description: z.string(),
+  // 执行子任务的 Agent 名称
   agent: z.string(),
+  // 子任务使用的模型（可选），不指定则继承父任务模型
   model: z
     .object({
+      // 提供者 ID
       providerID: ProviderID.zod,
+      // 模型 ID
       modelID: ModelID.zod,
     })
     .optional(),
+  // 触发子任务的命令名称（可选）
   command: z.string().optional(),
 }).meta({
   ref: "SubtaskPart",
@@ -232,10 +291,15 @@ export const SubtaskPart = PartBase.extend({
 export type SubtaskPart = z.infer<typeof SubtaskPart>
 
 export const RetryPart = PartBase.extend({
+  // 类型标识：重试记录
   type: z.literal("retry"),
+  // 重试次数（第几次重试）
   attempt: z.number(),
+  // 触发重试的 API 错误信息
   error: APIError.Schema,
+  // 重试发生的时间
   time: z.object({
+    // 创建时间（毫秒时间戳）
     created: z.number(),
   }),
 }).meta({
@@ -244,7 +308,9 @@ export const RetryPart = PartBase.extend({
 export type RetryPart = z.infer<typeof RetryPart>
 
 export const StepStartPart = PartBase.extend({
+  // 类型标识：步骤开始
   type: z.literal("step-start"),
+  // 步骤开始时的代码快照标识（可选）
   snapshot: z.string().optional(),
 }).meta({
   ref: "StepStartPart",
@@ -252,17 +318,29 @@ export const StepStartPart = PartBase.extend({
 export type StepStartPart = z.infer<typeof StepStartPart>
 
 export const StepFinishPart = PartBase.extend({
+  // 类型标识：步骤结束
   type: z.literal("step-finish"),
+  // 结束原因（如 "stop"、"tool-calls"、"length" 等）
   reason: z.string(),
+  // 步骤结束时的代码快照标识（可选）
   snapshot: z.string().optional(),
+  // 该步骤的费用
   cost: z.number(),
+  // 该步骤的 token 使用量
   tokens: z.object({
+    // 总 token 数（可选）
     total: z.number().optional(),
+    // 输入 token 数（不含缓存）
     input: z.number(),
+    // 输出 token 数（不含推理）
     output: z.number(),
+    // 推理/思考 token 数
     reasoning: z.number(),
+    // 缓存 token 信息
     cache: z.object({
+      // 缓存读取 token 数
       read: z.number(),
+      // 缓存写入 token 数
       write: z.number(),
     }),
   }),
@@ -273,8 +351,11 @@ export type StepFinishPart = z.infer<typeof StepFinishPart>
 
 export const ToolStatePending = z
   .object({
+    // 状态：等待执行
     status: z.literal("pending"),
+    // 工具调用的输入参数
     input: z.record(z.string(), z.any()),
+    // 原始输入的 JSON 字符串
     raw: z.string(),
   })
   .meta({
@@ -285,11 +366,17 @@ export type ToolStatePending = z.infer<typeof ToolStatePending>
 
 export const ToolStateRunning = z
   .object({
+    // 状态：执行中
     status: z.literal("running"),
+    // 工具调用的输入参数
     input: z.record(z.string(), z.any()),
+    // 工具显示标题（可选），如 "Reading file..."
     title: z.string().optional(),
+    // 运行时元数据（可选），如实时输出内容等
     metadata: z.record(z.string(), z.any()).optional(),
+    // 执行时间
     time: z.object({
+      // 开始时间（毫秒时间戳）
       start: z.number(),
     }),
   })
@@ -300,16 +387,26 @@ export type ToolStateRunning = z.infer<typeof ToolStateRunning>
 
 export const ToolStateCompleted = z
   .object({
+    // 状态：执行完成
     status: z.literal("completed"),
+    // 工具调用的输入参数
     input: z.record(z.string(), z.any()),
+    // 工具的文本输出结果
     output: z.string(),
+    // 工具显示标题
     title: z.string(),
+    // 执行结果的元数据（如文件路径、是否截断等）
     metadata: z.record(z.string(), z.any()),
+    // 执行时间
     time: z.object({
+      // 开始时间（毫秒时间戳）
       start: z.number(),
+      // 结束时间（毫秒时间戳）
       end: z.number(),
+      // 压缩时间（可选，上下文压缩时清除输出后设置）
       compacted: z.number().optional(),
     }),
+    // 附件列表（可选），如工具返回的图片等文件
     attachments: FilePart.array().optional(),
   })
   .meta({
@@ -319,12 +416,19 @@ export type ToolStateCompleted = z.infer<typeof ToolStateCompleted>
 
 export const ToolStateError = z
   .object({
+    // 状态：执行出错
     status: z.literal("error"),
+    // 工具调用的输入参数
     input: z.record(z.string(), z.any()),
+    // 错误信息
     error: z.string(),
+    // 错误相关的元数据（可选），如被中断时的部分输出等
     metadata: z.record(z.string(), z.any()).optional(),
+    // 执行时间
     time: z.object({
+      // 开始时间（毫秒时间戳）
       start: z.number(),
+      // 结束时间（毫秒时间戳）
       end: z.number(),
     }),
   })
@@ -333,6 +437,7 @@ export const ToolStateError = z
   })
 export type ToolStateError = z.infer<typeof ToolStateError>
 
+// 工具执行状态的联合类型：pending(等待) -> running(执行中) -> completed(完成) / error(出错)
 export const ToolState = z
   .discriminatedUnion("status", [ToolStatePending, ToolStateRunning, ToolStateCompleted, ToolStateError])
   .meta({
@@ -340,10 +445,15 @@ export const ToolState = z
   })
 
 export const ToolPart = PartBase.extend({
+  // 类型标识：工具调用
   type: z.literal("tool"),
+  // 工具调用的唯一 ID，用于关联请求和响应
   callID: z.string(),
+  // 工具名称，如 "bash"、"read"、"edit"、"grep" 等
   tool: z.string(),
+  // 工具执行状态（pending -> running -> completed/error）
   state: ToolState,
+  // 工具调用级别的元数据（可选），如 providerExecuted 标记等
   metadata: z.record(z.string(), z.any()).optional(),
 }).meta({
   ref: "ToolPart",
@@ -381,6 +491,10 @@ export const User = Base.extend({
 })
 export type User = z.infer<typeof User>
 
+// 消息内容部分的联合类型，按 type 字段区分：
+// text(文本) | subtask(子任务) | reasoning(推理) | file(文件) | tool(工具调用)
+// step-start(步骤开始) | step-finish(步骤结束) | snapshot(快照) | patch(补丁)
+// agent(Agent引用) | retry(重试) | compaction(上下文压缩)
 export const Part = z
   .discriminatedUnion("type", [
     TextPart,
