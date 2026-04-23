@@ -818,16 +818,24 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
 }
 
 const ProviderApiInfo = Schema.Struct({
+  // 模型在 API 中的实际标识符，发送给 provider 的 modelId（可能与用户看到的 modelID 不同）
   id: Schema.String,
+  // provider API 的基础 URL 地址（如 https://api.openai.com/v1），支持 ${ENV_VAR} 模板变量替换
   url: Schema.String,
+  // 对应的 AI SDK npm 包名（如 "@ai-sdk/anthropic"），用于动态加载 provider SDK
   npm: Schema.String,
 })
 
 const ProviderModalities = Schema.Struct({
+  // 是否支持文本模态
   text: Schema.Boolean,
+  // 是否支持音频模态
   audio: Schema.Boolean,
+  // 是否支持图片模态
   image: Schema.Boolean,
+  // 是否支持视频模态
   video: Schema.Boolean,
+  // 是否支持 PDF 文档模态
   pdf: Schema.Boolean,
 })
 
@@ -839,52 +847,84 @@ const ProviderInterleaved = Schema.Union([
 ])
 
 const ProviderCapabilities = Schema.Struct({
+  // 是否支持 temperature 参数调节（控制输出随机性）
   temperature: Schema.Boolean,
+  // 是否支持推理/思维链模式（如 Claude 的 extended thinking）
   reasoning: Schema.Boolean,
+  // 是否支持文件附件上传
   attachment: Schema.Boolean,
+  // 是否支持工具调用（function calling）
   toolcall: Schema.Boolean,
+  // 模型输入端支持的模态类型集合
   input: ProviderModalities,
+  // 模型输出端支持的模态类型集合
   output: ProviderModalities,
+  // 是否支持交错式思维输出（reasoning 内容与正文交替），或指定交错字段名
   interleaved: ProviderInterleaved,
 })
 
 const ProviderCacheCost = Schema.Struct({
+  // 缓存读取的单价（每百万 token 美元），即命中 prompt cache 时的输入计费
   read: Schema.Number,
+  // 缓存写入的单价（每百万 token 美元），即首次写入 prompt cache 时的额外计费
   write: Schema.Number,
 })
 
 const ProviderCost = Schema.Struct({
+  // 输入 token 单价（每百万 token 美元）
   input: Schema.Number,
+  // 输出 token 单价（每百万 token 美元）
   output: Schema.Number,
+  // prompt cache 相关费用（读取/写入）
   cache: ProviderCacheCost,
+  // 超过 200K token 上下文时的差异化定价（部分模型如 Claude 对长上下文有不同费率）
   experimentalOver200K: Schema.optional(
     Schema.Struct({
+      // 超 200K 时的输入单价
       input: Schema.Number,
+      // 超 200K 时的输出单价
       output: Schema.Number,
+      // 超 200K 时的缓存费用
       cache: ProviderCacheCost,
     }),
   ),
 })
 
 const ProviderLimit = Schema.Struct({
+  // 模型总上下文窗口大小（token），输入+输出共享此限制
   context: Schema.Number,
+  // 模型输入 token 上限（可选），部分 API 单独限制输入量；未设置时由 context 减去 output 推算
   input: Schema.optional(Schema.Number),
+  // 模型单次最大输出 token 数
   output: Schema.Number,
 })
 
 export const Model = Schema.Struct({
+  // 模型唯一标识（如 "claude-sonnet-4-20250514"），用于内部引用和用户选择
   id: ModelID,
+  // 所属 provider 标识（如 "anthropic"、"openai"）
   providerID: ProviderID,
+  // API 调用信息：实际 API modelId、基础 URL、SDK 包名
   api: ProviderApiInfo,
+  // 模型显示名称（如 "Claude Sonnet 4"），用于 UI 展示
   name: Schema.String,
+  // 模型家族（如 "claude"、"gpt"），用于分组和相关模型查找
   family: Schema.optional(Schema.String),
+  // 模型能力声明：支持的模态、工具调用、推理等
   capabilities: ProviderCapabilities,
+  // 模型使用费用：输入/输出/缓存的 token 单价
   cost: ProviderCost,
+  // 模型 token 限制：上下文窗口、输入上限、输出上限
   limit: ProviderLimit,
+  // 模型状态：alpha（实验性，需开启 flag）、beta、deprecated（已废弃，自动过滤）、active（正式可用）
   status: Schema.Literals(["alpha", "beta", "deprecated", "active"]),
+  // 传递给 SDK 的额外请求参数（如 reasoningEffort 等模型专属配置）
   options: Schema.Record(Schema.String, Schema.Any),
+  // 请求时附加的自定义 HTTP 头（如 anthropic-beta）
   headers: Schema.Record(Schema.String, Schema.String),
+  // 模型发布日期，用于排序和展示
   release_date: Schema.String,
+  // 模型变体配置（如 "thinking" 变体），每个变体可覆盖 options/headers 等参数
   variants: Schema.optional(Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.Any))),
 })
   .annotate({ identifier: "Model" })
@@ -892,12 +932,19 @@ export const Model = Schema.Struct({
 export type Model = Types.DeepMutable<Schema.Schema.Type<typeof Model>>
 
 export const Info = Schema.Struct({
+  // provider 唯一标识（如 "anthropic"、"openai"、"amazon-bedrock"）
   id: ProviderID,
+  // provider 显示名称（如 "Anthropic"、"OpenAI"）
   name: Schema.String,
+  // provider 激活来源：env=环境变量中发现 API Key、config=opencode.json 配置、custom=自定义加载逻辑、api=通过 opencode auth 命令存储的密钥
   source: Schema.Literals(["env", "config", "custom", "api"]),
+  // 关联的环境变量名列表（如 ["ANTHROPIC_API_KEY"]），用于自动检测 provider 是否可用
   env: Schema.Array(Schema.String),
+  // API Key 值（从环境变量或 auth 存储中获取），传递给 SDK 作为认证凭据
   key: Schema.optional(Schema.String),
+  // 传递给 SDK 工厂函数的配置项（如 baseURL、headers、region 等）
   options: Schema.Record(Schema.String, Schema.Any),
+  // 该 provider 下所有可用模型的映射表，key 为 modelID
   models: Schema.Record(Schema.String, Model),
 })
   .annotate({ identifier: "Provider" })
@@ -907,14 +954,19 @@ export type Info = Types.DeepMutable<Schema.Schema.Type<typeof Info>>
 const DefaultModelIDs = Schema.Record(Schema.String, Schema.String)
 
 export const ListResult = Schema.Struct({
+  // 所有已激活的 provider 列表（含其下属模型）
   all: Schema.Array(Info),
+  // 每个 provider 的默认模型 ID 映射（providerID → modelID）
   default: DefaultModelIDs,
+  // 已成功连接/认证的 provider ID 列表
   connected: Schema.Array(Schema.String),
 }).pipe(withStatics((s) => ({ zod: zod(s) })))
 export type ListResult = Types.DeepMutable<Schema.Schema.Type<typeof ListResult>>
 
 export const ConfigProvidersResult = Schema.Struct({
+  // 配置中定义的 provider 列表（用于配置管理 UI）
   providers: Schema.Array(Info),
+  // 每个 provider 的默认模型 ID 映射
   default: DefaultModelIDs,
 }).pipe(withStatics((s) => ({ zod: zod(s) })))
 export type ConfigProvidersResult = Types.DeepMutable<Schema.Schema.Type<typeof ConfigProvidersResult>>

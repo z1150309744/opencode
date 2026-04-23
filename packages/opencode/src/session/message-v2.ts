@@ -466,25 +466,40 @@ const Base = z.object({
 })
 
 export const User = Base.extend({
+  // 消息角色：固定为 "user"，表示用户发送的消息
   role: z.literal("user"),
+  // 时间信息
   time: z.object({
+    // 消息创建时间（毫秒时间戳）
     created: z.number(),
   }),
+  // 输出格式要求（可选），用户可指定 AI 回复的输出格式（纯文本或 JSON Schema）
   format: Format.optional(),
+  // 消息摘要（可选），用于在会话列表中展示此轮对话的概要信息
   summary: z
     .object({
+      // 摘要标题（可选），简短描述本轮对话的主题
       title: z.string().optional(),
+      // 摘要正文（可选），对本轮对话内容的详细概述
       body: z.string().optional(),
+      // 本轮对话中产生的文件差异列表，记录代码变更
       diffs: Snapshot.FileDiff.array(),
     })
     .optional(),
+  // 处理此消息的 Agent 名称（如 "code"、"plan" 等），决定 AI 的行为模式
   agent: z.string(),
+  // 用户选择的模型配置，指定由哪个提供者的哪个模型来回复
   model: z.object({
+    // 提供者 ID（如 "anthropic"、"openai" 等）
     providerID: ProviderID.zod,
+    // 模型 ID（如 "claude-sonnet-4-20250514"、"gpt-4o" 等）
     modelID: ModelID.zod,
+    // 模型变体（可选），如 "thinking" 表示启用扩展思考模式
     variant: z.string().optional(),
   }),
+  // 系统提示词（可选），当前轮次使用的 system prompt 内容
   system: z.string().optional(),
+  // 工具启用配置（可选），键为工具名称，值为是否启用，控制 AI 在本轮可使用哪些工具
   tools: z.record(z.string(), z.boolean()).optional(),
 }).meta({
   ref: "UserMessage",
@@ -516,11 +531,17 @@ export const Part = z
 export type Part = z.infer<typeof Part>
 
 export const Assistant = Base.extend({
+  // 消息角色：固定为 "assistant"，表示 AI 助手的回复消息
   role: z.literal("assistant"),
+  // 时间信息
   time: z.object({
+    // 消息创建时间（毫秒时间戳）
     created: z.number(),
+    // 消息完成时间（毫秒时间戳，可选），流式响应结束后设置
     completed: z.number().optional(),
   }),
+  // 错误信息（可选），当 AI 回复过程中发生错误时记录
+  // 包含多种错误类型：认证错误、API 错误、输出长度超限、用户中断、结构化输出错误、上下文溢出等
   error: z
     .discriminatedUnion("name", [
       AuthError.Schema,
@@ -532,32 +553,52 @@ export const Assistant = Base.extend({
       APIError.Schema,
     ])
     .optional(),
+  // 父消息 ID，指向触发此回复的用户消息
   parentID: MessageID.zod,
+  // 生成此消息的模型 ID
   modelID: ModelID.zod,
+  // 生成此消息的提供者 ID
   providerID: ProviderID.zod,
   /**
-   * @deprecated
+   * @deprecated 已废弃，请使用 agent 字段
    */
   mode: z.string(),
+  // 执行此回复的 Agent 名称（如 "build"、"plan" 等）
   agent: z.string(),
+  // 执行路径信息
   path: z.object({
+    // 当前工作目录
     cwd: z.string(),
+    // 项目根目录（通常是 git worktree 根路径）
     root: z.string(),
   }),
+  // 是否为上下文压缩生成的摘要消息（可选），true 表示这是一条压缩摘要
   summary: z.boolean().optional(),
+  // 本次回复的费用（美元）
   cost: z.number(),
+  // Token 使用量统计
   tokens: z.object({
+    // 总 Token 数（可选）
     total: z.number().optional(),
+    // 输入 Token 数（不含缓存命中的 Token）
     input: z.number(),
+    // 输出 Token 数（不含推理/思考 Token）
     output: z.number(),
+    // 推理/思考 Token 数（如 Claude 的 extended thinking）
     reasoning: z.number(),
+    // 缓存相关 Token 信息
     cache: z.object({
+      // 缓存读取命中的 Token 数
       read: z.number(),
+      // 缓存写入的 Token 数
       write: z.number(),
     }),
   }),
+  // 结构化输出结果（可选），当用户请求 json_schema 格式输出时，存储解析后的 JSON 对象
   structured: z.any().optional(),
+  // 模型变体标识（可选），如 "thinking" 等不同配置变体
   variant: z.string().optional(),
+  // 完成原因（可选），如 "stop"（正常结束）、"tool-calls"（需要工具调用）、"length"（达到长度限制）等
   finish: z.string().optional(),
 }).meta({
   ref: "AssistantMessage",

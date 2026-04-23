@@ -217,7 +217,13 @@ export const layer: Layer.Layer<
         log.info("pruned", { count: toPrune.length })
       }
     })
-
+    /**
+     * 1. 选择要压缩的消息范围 — 通过 select 函数将消息分为 head（要被压缩的历史）和 tail（保留的最近几轮对话）
+     *   2. 调用 LLM 生成摘要 — 使用 compaction agent，将 head 部分的对话历史发送给模型，要求模型按模板生成结构化摘要（Goal / Instructions / Discoveries / Accomplished / Relevant files）
+     *   3. 保存摘要消息 — 摘要作为 summary: true 的 assistant 消息存入数据库，后续加载消息时，filterCompactedEffect 会用摘要替代旧消息
+     *   4. 处理溢出场景 — 如果 overflow: true（上下文已经超限），会找到最后一条真实用户消息并"重放"，确保用户的请求不会丢失
+     *   5. 自动继续 — 压缩完成后自动插入一条 "Continue if you have next steps" 的用户消息，让 LLM 继续工作
+     */
     const processCompaction = Effect.fn("SessionCompaction.process")(function* (input: {
       parentID: MessageID
       messages: MessageV2.WithParts[]

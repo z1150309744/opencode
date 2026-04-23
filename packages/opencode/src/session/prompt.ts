@@ -221,6 +221,7 @@ export const layer = Layer.effect(
       agent: Agent.Info
       session: Session.Info
     }) {
+      // TODO zouwenwen.5 压缩后，找到的第一个user会不会是压缩信息的那个
       const userMessage = input.messages.findLast((msg) => msg.info.role === "user")
       if (!userMessage) return input.messages
 
@@ -276,74 +277,74 @@ export const layer = Layer.effect(
         sessionID: userMessage.info.sessionID,
         type: "text",
         text: `<system-reminder>
-Plan mode is active. The user indicated that they do not want you to execute yet -- you MUST NOT make any edits (with the exception of the plan file mentioned below), run any non-readonly tools (including changing configs or making commits), or otherwise make any changes to the system. This supersedes any other instructions you have received.
+计划模式已激活。用户表示他们不希望你现在就执行——你绝不能进行任何编辑（除了下面提到的计划文件），运行任何非只读工具（包括更改配置或提交代码），或以其他方式对系统进行任何更改。这优先于你收到的任何其他指令。
 
-## Plan File Info:
-${exists ? `A plan file already exists at ${plan}. You can read it and make incremental edits using the edit tool.` : `No plan file exists yet. You should create your plan at ${plan} using the write tool.`}
-You should build your plan incrementally by writing to or editing this file. NOTE that this is the only file you are allowed to edit - other than this you are only allowed to take READ-ONLY actions.
+## 计划文件信息：
+${exists ? `计划文件已存在于 ${plan}。你可以阅读它并使用 edit 工具进行增量编辑。` : `尚未存在计划文件。你应该使用 write 工具在 ${plan} 创建你的计划。`}
+你应该通过写入或编辑此文件来逐步构建你的计划。注意，这是你唯一被允许编辑的文件——除此之外，你只被允许执行只读操作。
 
-## Plan Workflow
+## 计划工作流
 
-### Phase 1: Initial Understanding
-Goal: Gain a comprehensive understanding of the user's request by reading through code and asking them questions. Critical: In this phase you should only use the explore subagent type.
+### 阶段 1：初步理解
+目标：通过阅读代码和向用户提问，全面理解用户的请求。关键：在此阶段，你应该只使用 explore 子代理类型。
 
-1. Focus on understanding the user's request and the code associated with their request
+1. 专注于理解用户的请求以及与其请求相关的代码
 
-2. **Launch up to 3 explore agents IN PARALLEL** (single message, multiple tool calls) to efficiently explore the codebase.
- - Use 1 agent when the task is isolated to known files, the user provided specific file paths, or you're making a small targeted change.
- - Use multiple agents when: the scope is uncertain, multiple areas of the codebase are involved, or you need to understand existing patterns before planning.
- - Quality over quantity - 3 agents maximum, but you should try to use the minimum number of agents necessary (usually just 1)
- - If using multiple agents: Provide each agent with a specific search focus or area to explore. Example: One agent searches for existing implementations, another explores related components, a third investigates testing patterns
+2. **并行启动最多 3 个 explore 代理**（单条消息，多个工具调用）以高效探索代码库。
+ - 在以下情况使用 1 个代理：任务局限于已知文件、用户提供了具体文件路径、或你只是做一个小的定向更改。
+ - 在以下情况使用多个代理：范围不确定、涉及代码库的多个区域、或你需要在规划前理解现有模式。
+ - 质量优于数量——最多 3 个代理，但你应该尽量使用最少数量的代理（通常只需 1 个）
+ - 如果使用多个代理：为每个代理提供具体的搜索重点或探索区域。例如：一个代理搜索现有实现，另一个探索相关组件，第三个调查测试模式
 
-3. After exploring the code, use the question tool to clarify ambiguities in the user request up front.
+3. 探索代码后，使用 question 工具预先澄清用户请求中的模糊之处。
 
-### Phase 2: Design
-Goal: Design an implementation approach.
+### 阶段 2：设计
+目标：设计实施方案。
 
-Launch general agent(s) to design the implementation based on the user's intent and your exploration results from Phase 1.
+根据用户意图和阶段 1 的探索结果，启动通用代理来设计实施方案。
 
-You can launch up to 1 agent(s) in parallel.
+你可以并行启动最多 1 个代理。
 
-**Guidelines:**
-- **Default**: Launch at least 1 Plan agent for most tasks - it helps validate your understanding and consider alternatives
-- **Skip agents**: Only for truly trivial tasks (typo fixes, single-line changes, simple renames)
+**指南：**
+- **默认**：大多数任务至少启动 1 个 Plan 代理——这有助于验证你的理解并考虑替代方案
+- **跳过代理**：仅用于真正微小的任务（修复拼写错误、单行更改、简单重命名）
 
-Examples of when to use multiple agents:
-- The task touches multiple parts of the codebase
-- It's a large refactor or architectural change
-- There are many edge cases to consider
-- You'd benefit from exploring different approaches
+需要使用多个代理的示例：
+- 任务涉及代码库的多个部分
+- 这是一个大型重构或架构变更
+- 有许多边界情况需要考虑
+- 探索不同方案对你有益
 
-Example perspectives by task type:
-- New feature: simplicity vs performance vs maintainability
-- Bug fix: root cause vs workaround vs prevention
-- Refactoring: minimal change vs clean architecture
+按任务类型的示例视角：
+- 新功能：简单性 vs 性能 vs 可维护性
+- Bug 修复：根本原因 vs 临时方案 vs 预防
+- 重构：最小更改 vs 整洁架构
 
-In the agent prompt:
-- Provide comprehensive background context from Phase 1 exploration including filenames and code path traces
-- Describe requirements and constraints
-- Request a detailed implementation plan
+在代理提示中：
+- 提供阶段 1 探索的全面背景上下文，包括文件名和代码路径追踪
+- 描述需求和约束
+- 请求详细的实施计划
 
-### Phase 3: Review
-Goal: Review the plan(s) from Phase 2 and ensure alignment with the user's intentions.
-1. Read the critical files identified by agents to deepen your understanding
-2. Ensure that the plans align with the user's original request
-3. Use question tool to clarify any remaining questions with the user
+### 阶段 3：审查
+目标：审查阶段 2 的计划并确保与用户意图一致。
+1. 阅读代理识别的关键文件以加深理解
+2. 确保计划与用户的原始请求一致
+3. 使用 question 工具与用户澄清任何剩余问题
 
-### Phase 4: Final Plan
-Goal: Write your final plan to the plan file (the only file you can edit).
-- Include only your recommended approach, not all alternatives
-- Ensure that the plan file is concise enough to scan quickly, but detailed enough to execute effectively
-- Include the paths of critical files to be modified
-- Include a verification section describing how to test the changes end-to-end (run the code, use MCP tools, run tests)
+### 阶段 4：最终计划
+目标：将最终计划写入计划文件（你唯一可以编辑的文件）。
+- 仅包含你推荐的方案，而非所有替代方案
+- 确保计划文件足够简洁可快速浏览，但足够详细可有效执行
+- 包含需要修改的关键文件路径
+- 包含验证章节，描述如何端到端测试更改（运行代码、使用 MCP 工具、运行测试）
 
-### Phase 5: Call plan_exit tool
-At the very end of your turn, once you have asked the user questions and are happy with your final plan file - you should always call plan_exit to indicate to the user that you are done planning.
-This is critical - your turn should only end with either asking the user a question or calling plan_exit. Do not stop unless it's for these 2 reasons.
+### 阶段 5：调用 plan_exit 工具
+在你的回合结束时，一旦你已向用户提问并对最终计划文件满意——你应该始终调用 plan_exit 来向用户表明你已完成规划。
+这很关键——你的回合应该只以向用户提问或调用 plan_exit 结束。除了这两个原因外，不要停止。
 
-**Important:** Use question tool to clarify requirements/approach, use plan_exit to request plan approval. Do NOT use question tool to ask "Is this plan okay?" - that's what plan_exit does.
+**重要：** 使用 question 工具澄清需求/方案，使用 plan_exit 请求计划批准。不要使用 question 工具询问"这个计划可以吗？"——那是 plan_exit 的用途。
 
-NOTE: At any point in time through this workflow you should feel free to ask the user questions or clarifications. Don't make large assumptions about user intent. The goal is to present a well researched plan to the user, and tie any loose ends before implementation begins.
+注意：在此工作流的任何时候，你都可以随时向用户提问或寻求澄清。不要对用户意图做出重大假设。目标是向用户呈现一个经过充分研究的计划，并在实施开始前解决所有悬而未决的问题。
 </system-reminder>`,
         synthetic: true,
       })
@@ -960,7 +961,6 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         ...part,
         id: part.id ? PartID.make(part.id) : PartID.ascending(),
       })
-
       // 将用户输入的一个 Part 解析展开为一个或多个 Draft Part，供 LLM消费
       const resolvePart: (part: PromptInput["parts"][number]) => Effect.Effect<Draft<MessageV2.Part>[]> = Effect.fn(
         "SessionPrompt.resolveUserPart",
@@ -1028,6 +1028,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                     sessionID: input.sessionID,
                     type: "text",
                     synthetic: true,
+                    // 使用名为“Read”的工具，并输入以下内容
                     text: `Called the Read tool with the following input: ${JSON.stringify({ filePath: part.filename })}`,
                   },
                   {
@@ -1279,7 +1280,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         const session = yield* sessions.get(input.sessionID)
         yield* revert.cleanup(session)
         const message = yield* createUserMessage(input)
-        yield* sessions.touch(input.sessionID)
+        yield* sessions.touch(input.sessionID) //更新会话的最后活跃时间戳
 
         const permissions: Permission.Ruleset = []
         for (const [t, enabled] of Object.entries(input.tools ?? {})) {
@@ -1315,12 +1316,12 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           yield* status.set(sessionID, { type: "busy" })
           yield* slog.info("loop", { step })
 
-          let msgs = yield* MessageV2.filterCompactedEffect(sessionID)
+          let msgs = yield* MessageV2.filterCompactedEffect(sessionID) //从数据库中按时间顺序加载某个 session 的所有消息，并过滤掉已被"压缩(compaction)"替代的旧消息，只返回当前有效的消息列表
 
-          let lastUser: MessageV2.User | undefined
-          let lastAssistant: MessageV2.Assistant | undefined
-          let lastFinished: MessageV2.Assistant | undefined
-          let tasks: (MessageV2.CompactionPart | MessageV2.SubtaskPart)[] = []
+          let lastUser: MessageV2.User | undefined //当前需要被 LLM 回复的那条用户消息
+          let lastAssistant: MessageV2.Assistant | undefined // 最后一条 assistant 消息的 info（无论是否完成）
+          let lastFinished: MessageV2.Assistant | undefined //最后一条已完成的 assistant 消息的 info
+          let tasks: (MessageV2.CompactionPart | MessageV2.SubtaskPart)[] = [] //这些 task part 代表当前还在进行中的、未完结的上下文压缩或子任务，后续代码需要知道这些信息来决定是否要继续某个子任务或处理压缩状态。
           for (let i = msgs.length - 1; i >= 0; i--) {
             const msg = msgs[i]
             if (!lastUser && msg.info.role === "user") lastUser = msg.info
@@ -1344,9 +1345,9 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             lastAssistantMsg?.parts.some((part) => part.type === "tool" && !part.metadata?.providerExecuted) ?? false
 
           if (
-            lastAssistant?.finish &&
-            !["tool-calls"].includes(lastAssistant.finish) &&
-            !hasToolCalls &&
+            lastAssistant?.finish && //说明模型已经给出了完成信号
+            !["tool-calls"].includes(lastAssistant.finish) && //如果是 tool-calls，说明模型还在调用工具，循环必须继续，以便把工具执行结果送回模型
+            !hasToolCalls && //即使某些 provider 错误地返回了 "stop"，但消息中实际包含了未执行的工具调用
             lastUser.id < lastAssistant.id
           ) {
             yield* slog.info("exiting loop")
@@ -1401,7 +1402,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           }
           const maxSteps = agent.steps ?? Infinity
           const isLastStep = step >= maxSteps
-          msgs = yield* insertReminders({ messages: msgs, agent, session })
+          msgs = yield* insertReminders({ messages: msgs, agent, session }) //本质上是一个模式感知的提示词注入器。它根据 agent 类型（plan vs build）和历史消息中的 agent 切换情况，在用户消息尾部追加 synthetic part，从而控制 LLM在不同阶段的行为边界——规划阶段只规划不动手，执行阶段按计划动手
 
           const msg: MessageV2.Assistant = {
             id: MessageID.ascending(),
@@ -1533,7 +1534,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       },
     )
 
-    const loop: (input: z.infer<typeof LoopInput>) => Effect.Effect<MessageV2.WithParts> = Effect.fn(
+    const loop: (input: z.infer<typeof LoopInput>) => Effect.Effect<MessageV2.WithParts> = Effect.fn( //loop 是对 runLoop 的一层包装，通过 state.ensureRunning 提供运行状态管理——确保同一个 session 不会同时运行多个循环
       "SessionPrompt.loop",
     )(function* (input: z.infer<typeof LoopInput>) {
       return yield* state.ensureRunning(input.sessionID, lastAssistant(input.sessionID), runLoop(input.sessionID))

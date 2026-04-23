@@ -212,6 +212,7 @@ const InfoSchema = Schema.Struct({
         description: "Maximum number of tokens from recent turns to preserve verbatim after compaction",
       }),
       reserved: Schema.optional(NonNegativeInt).annotate({
+        //用于压缩的令牌缓冲区。留有足够的空间以避免在压缩过程中出现溢出情况
         description: "Token buffer for compaction. Leaves enough window to avoid overflow during compaction.",
       }),
     }),
