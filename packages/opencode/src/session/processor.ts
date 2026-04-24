@@ -105,6 +105,10 @@ export const layer: Layer.Layer<
     const scope = yield* Scope.Scope
     const status = yield* SessionStatus.Service
 
+    /**
+     * 是会话处理器的核心工厂方法，它为一次 LLM 调用创建一个 Handle 对象，该 Handle
+     *   封装了完整的流式事件处理、工具调用生命周期管理、快照追踪与错误恢复逻辑
+     */
     const create = Effect.fn("SessionProcessor.create")(function* (input: Input) {
       // Pre-capture snapshot before the LLM stream starts. The AI SDK
       // may execute tools internally before emitting start-step events,

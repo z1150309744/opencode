@@ -53,15 +53,15 @@ import { EffectBridge } from "@/effect"
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
 
-const STRUCTURED_OUTPUT_DESCRIPTION = `Use this tool to return your final response in the requested structured format.
+const STRUCTURED_OUTPUT_DESCRIPTION = `使用此工具以请求的结构化格式返回你的最终响应。
 
-IMPORTANT:
-- You MUST call this tool exactly once at the end of your response
-- The input must be valid JSON matching the required schema
-- Complete all necessary research and tool calls BEFORE calling this tool
-- This tool provides your final answer - no further actions are taken after calling it`
+重要：
+- 你必须在响应结束时恰好调用此工具一次
+- 输入必须是符合所需 schema 的有效 JSON
+- 在调用此工具之前，完成所有必要的研究和工具调用
+- 此工具提供你的最终答案——调用后不会再执行任何操作`
 
-const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.`
+const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `重要：用户已请求结构化输出。你必须使用 StructuredOutput 工具来提供最终响应。不要以纯文本回复——你必须调用 StructuredOutput 工具，并按照 schema 格式化你的答案。`
 
 const log = Log.create({ service: "session.prompt" })
 const elog = EffectLogger.create({ service: "session.prompt" })
@@ -399,12 +399,12 @@ ${exists ? `计划文件已存在于 ${plan}。你可以阅读它并使用 edit 
             .pipe(Effect.orDie),
       })
 
-      for (const item of yield* registry.tools({
+      for (const item of yield* registry.tools({ //注册内置工具
         modelID: ModelID.make(input.model.api.id),
         providerID: input.model.providerID,
         agent: input.agent,
       })) {
-        const schema = ProviderTransform.schema(input.model, z.toJSONSchema(item.parameters))
+        const schema = ProviderTransform.schema(input.model, z.toJSONSchema(item.parameters)) // 对工具的参数 schema 做 provider 适配转换
         tools[item.id] = tool({
           description: item.description,
           inputSchema: jsonSchema(schema),
@@ -442,7 +442,7 @@ ${exists ? `计划文件已存在于 ${plan}。你可以阅读它并使用 edit 
         })
       }
 
-      for (const [key, item] of Object.entries(yield* mcp.tools())) {
+      for (const [key, item] of Object.entries(yield* mcp.tools())) { //注册 MCP 工具
         const execute = item.execute
         if (!execute) continue
 
@@ -1450,6 +1450,7 @@ ${exists ? `计划文件已存在于 ${plan}。你可以阅读它并使用 edit 
             }
 
             if (step === 1)
+              // SessionSummary.summarize 更新"这个会话到目前为止改了哪些文件"的统计，同时记录"这条用户消息引发了哪些文件变更"
               yield* summary.summarize({ sessionID, messageID: lastUser.id }).pipe(Effect.ignore, Effect.forkIn(scope))
 
             if (step > 1 && lastFinished) {

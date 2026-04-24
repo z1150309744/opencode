@@ -106,8 +106,8 @@ export const layer = Layer.effect(
       const all = yield* sessions.messages({ sessionID: input.sessionID })
       if (!all.length) return
 
-      const diffs = yield* computeDiff({ messages: all })
-      yield* sessions.setSummary({
+      const diffs = yield* computeDiff({ messages: all }) //文件路径、补丁文本、增删行数、状态
+      yield* sessions.setSummary({ //Session.setSummary
         sessionID: input.sessionID,
         summary: {
           additions: diffs.reduce((sum, x) => sum + x.additions, 0),
@@ -118,6 +118,7 @@ export const layer = Layer.effect(
       yield* storage.write(["session_diff", input.sessionID], diffs).pipe(Effect.ignore)
       yield* bus.publish(Session.Event.Diff, { sessionID: input.sessionID, diff: diffs })
 
+      // 得到这一轮对话（用户提问 → 助手回答）产生的文件变更。将结果挂到 target.info.summary.diffs 上并持久化，这样每条用户消息都有独立的变更记录
       const messages = all.filter(
         (m) => m.info.id === input.messageID || (m.info.role === "assistant" && m.info.parentID === input.messageID),
       )

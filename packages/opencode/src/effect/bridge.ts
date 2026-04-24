@@ -20,9 +20,15 @@ function restore<R>(instance: InstanceContext | undefined, workspace: WorkspaceI
   return fn()
 }
 
+/**
+ * 使用场景：当你需要在一个回调、事件处理器或第三方库的非 Effect 代码中执行 Effect 时，
+ * 先在 Effect 上下文中调用 EffectBridge.make() 捕获当前环境，之后就可以在任意位置通过
+ *   bridge.promise(effect) 或 bridge.fork(effect) 来运行 Effect，且这些 Effect
+ *   会自动携带之前捕获的所有服务和上下文
+ */
 export function make(): Effect.Effect<Shape> {
   return Effect.gen(function* () {
-    const ctx = yield* Effect.context()
+    const ctx = yield* Effect.context() //捕获当前完整的 Effect 上下文（所有已提供的服务层）
     const value = yield* InstanceRef
     const instance =
       value ??
