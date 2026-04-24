@@ -1453,7 +1453,8 @@ ${exists ? `计划文件已存在于 ${plan}。你可以阅读它并使用 edit 
               // SessionSummary.summarize 更新"这个会话到目前为止改了哪些文件"的统计，同时记录"这条用户消息引发了哪些文件变更"
               yield* summary.summarize({ sessionID, messageID: lastUser.id }).pipe(Effect.ignore, Effect.forkIn(scope))
 
-            if (step > 1 && lastFinished) {
+            if (step > 1 && lastFinished) { //在多步骤（multi-step）对话中，将用户在 agent 工作期间插入的"中途消息"包裹进<system-reminder> 标签，以引导模型正确处理这些消息
+              // TODO zouwenwen.5 怎么实现的，最后会成什么样给到大模型
               for (const m of msgs) {
                 if (m.info.role !== "user" || m.info.id <= lastFinished.id) continue
                 for (const p of m.parts) {
@@ -1475,7 +1476,10 @@ ${exists ? `计划文件已存在于 ${plan}。你可以阅读它并使用 edit 
 
             const [skills, env, instructions, modelMsgs] = yield* Effect.all([
               sys.skills(agent),
-              Effect.sync(() => sys.environment(model)),
+              Effect.sync(() => sys.environment(model)), //生成运行环境信息：当前使用的模型名/ID、工作目录、workspace 根目录、是否是 git 仓库、操作系统平台、当前日期。放在 <env>标签内。这让模型了解自己的执行环境上下文
+              // 加载用户自定义的 system 指令文件
+              // 本地文件：通过 systemPaths() 搜索 AGENTS.md / CLAUDE.md 等文件，从项目目录和全局配置目录中查找（findUp 从当前目录向上搜索到 workspace 根）
+              // - 远程 URL：配置中的 http/https 指令地址，通过 HTTP 拉取
               instruction.system().pipe(Effect.orDie),
               MessageV2.toModelMessagesEffect(msgs, model),
             ])
