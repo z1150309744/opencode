@@ -1107,6 +1107,7 @@ export const filterCompactedEffect = Effect.fnUntraced(function* (sessionID: Ses
   return filterCompacted(stream(sessionID))
 })
 
+//将任意错误标准化为 MessageV2 的错误格式。它会捕获 provider 信息和是否主动中止的状态，用于后续的错误分类（比如区分上下文溢出、API 错误、中止等不同情况）
 export function fromError(
   e: unknown,
   ctx: { providerID: ProviderID; aborted?: boolean },

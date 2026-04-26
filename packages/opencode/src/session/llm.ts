@@ -30,17 +30,44 @@ export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
 type Result = Awaited<ReturnType<typeof streamText>>
 
 export type StreamInput = {
+  // 当前触发本次 LLM 调用的用户消息。包含 user.system（用户级 system prompt 追加项）、
+  // user.tools（工具白/黑名单覆盖）、user.id（请求关联标识，写入 x-opencode-request 头）、
+  // user.model.variant（决定使用模型的哪个 variant 配置）等
   user: MessageV2.User
+  // 当前会话 ID。用于日志 tag、telemetry 元数据、权限请求关联、自定义 HTTP header
+  // （x-opencode-session / x-session-affinity）和工具执行时的 session 上下文
   sessionID: string
+  // 父会话 ID（可选）。当本次调用是 subtask/嵌套会话时使用，会作为 x-parent-session-id
+  // 头传给非 opencode provider，用于服务端追踪父子会话关系
   parentSessionID?: string
+  // 模型描述对象。包含 providerID（提供商 ID）、id（模型 ID）、capabilities（能力开关，
+  // 如是否支持 temperature）、options（模型默认 provider options）、variants（模型变体配置）、
+  // headers（模型级别自定义请求头）、api（API 路径信息）等
   model: Provider.Model
+  // 当前生效的 agent 配置。包含 prompt（agent 专属 system prompt，存在则覆盖 provider 默认）、
+  // permission（agent 权限规则集，与 input.permission 合并）、options（agent 级 provider options
+  // 覆盖）、temperature/topP（采样参数覆盖）、name/mode（用于日志 tag 和提示注入）
   agent: Agent.Info
+  // 会话级权限规则集（可选）。会与 agent.permission 通过 Permission.merge 合并，
+  // 决定哪些工具被禁用/需要审批，以及 GitLab Workflow 模式下哪些工具属于"已预批准"
   permission?: Permission.Ruleset
+  // 调用方追加的额外 system prompt 数组。会与 agent prompt、user.system 拼接成最终 system 消息；
+  // 同时支持插件通过 experimental.chat.system.transform 钩子修改后再注入到 messages
   system: string[]
+  // 已经转换为 AI SDK ModelMessage 格式的历史消息列表。除了 OpenAI OAuth 和 GitLab Workflow
+  // 这两种特殊路径外，最终发送给模型时会在前面拼接 system 消息
   messages: ModelMessage[]
+  // 是否走"小模型/快速"路径（可选）。true 时使用 ProviderTransform.smallOptions 简化 provider 选项，
+  // 并跳过 variant 解析。用于摘要、标题生成等不需要完整能力的内部调用
   small?: boolean
+  // 本次调用可用的工具映射表（toolName → AI SDK Tool 定义）。会经过 resolveTools 根据
+  // user.tools 覆盖和权限规则过滤，并可能注入 _noop 占位工具以满足 LiteLLM 类代理的校验
   tools: Record<string, Tool>
+  // AI SDK 内置的最大重试次数（可选，默认 0）。设为 0 表示禁用 SDK 层重试，
+  // 由 OpenCode 外层的 SessionRetry 策略统一接管重试逻辑
   retries?: number
+  // 工具选择策略（可选）。"auto" 由模型自行决定是否调用工具；"required" 强制必须调用某个工具
+  // （用于 JSON 结构化输出场景，配合虚拟 StructuredOutput 工具）；"none" 禁止工具调用
   toolChoice?: "auto" | "required" | "none"
 }
 
@@ -51,7 +78,7 @@ export type StreamRequest = StreamInput & {
 export type Event = Result["fullStream"] extends AsyncIterable<infer T> ? T : never
 
 export interface Interface {
-  readonly stream: (input: StreamInput) => Stream.Stream<Event, unknown>
+  readonly stream: (input: StreamInput) => Stream.Stream<Event, unknown> //LLM.stream
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/LLM") {}
@@ -85,25 +112,25 @@ const live: Layer.Layer<
 
       const [language, cfg, item, info] = yield* Effect.all(
         [
-          provider.getLanguage(input.model),
+          provider.getLanguage(input.model),//AI SDK 的 LanguageModel 实例，是实际发 HTTP 请求的对象
           config.get(),
-          provider.getProvider(input.model.providerID),
-          auth.get(input.model.providerID),
+          provider.getProvider(input.model.providerID), //Provider 元数据（id、options、litellmProxy 等）
+          auth.get(input.model.providerID), //该 provider 的认证信息（类型：oauth / api-key / none）
         ],
         { concurrency: "unbounded" },
       )
 
-      // TODO: move this to a proper hook
+      // TODO: 移到合适的 hook 中处理
       const isOpenaiOauth = item.id === "openai" && info?.type === "oauth"
 
       const system: string[] = []
       system.push(
         [
-          // use agent prompt otherwise provider prompt
+          // 优先使用 agent prompt，否则使用 provider prompt
           ...(input.agent.prompt ? [input.agent.prompt] : SystemPrompt.provider(input.model)),
-          // any custom prompt passed into this call
+          // 本次调用传入的自定义 prompt
           ...input.system,
-          // any custom prompt from last user message
+          // 来自最后一条用户消息的自定义 prompt
           ...(input.user.system ? [input.user.system] : []),
         ]
           .filter((x) => x)
@@ -116,7 +143,7 @@ const live: Layer.Layer<
         { sessionID: input.sessionID, model: input.model },
         { system },
       )
-      // rejoin to maintain 2-part structure for caching if header unchanged
+      // 如果 header 未变，重新合并以保持两部分结构用于缓存
       if (system.length > 2 && system[0] === header) {
         const rest = system.slice(1)
         system.length = 0
@@ -135,15 +162,27 @@ const live: Layer.Layer<
             providerOptions: item.options,
           })
       const options: Record<string, any> = pipe(
-        base,
-        mergeDeep(input.model.options),
-        mergeDeep(input.agent.options),
-        mergeDeep(variant),
+        base,//small 模式用简化选项，否则用完整选项（包含 provider 级别配置
+        mergeDeep(input.model.options),//模型级别覆盖
+        mergeDeep(input.agent.options),//agent 级别覆盖
+        mergeDeep(variant),//用户选择的模型变体覆盖（如 thinking 变体可能加大 token 限制）
       )
-      if (isOpenaiOauth) {
+      if (isOpenaiOauth) {//OpenAI OAuth 模式下，system prompt 走 instructions 字段而非 messages
         options.instructions = system.join("\n")
       }
 
+      /**
+       *   三条路径：
+       *
+       *   ┌───────────────────┬────────────────────────┬───────────────────────────────────────────────────────────┐
+       *   │       条件        │   messages 构造方式    │                           原因                            │
+       *   ├───────────────────┼────────────────────────┼───────────────────────────────────────────────────────────┤
+       *   │ OpenAI OAuth      │ 直接用 input.messages  │ system 已放入 options.instructions                        │
+       *   ├───────────────────┼────────────────────────┼───────────────────────────────────────────────────────────┤
+       *   │ GitLab Workflow   │ 直接用 input.messages  │ system 通过 workflowModel.systemPrompt 单独传递           │
+       *   ├───────────────────┼────────────────────────┼───────────────────────────────────────────────────────────┤
+       *   │ 其他所有 provider │ system 消息 + 历史消息 │ 标准的 [{role:"system",...}, {role:"user",...}, ...] 格式
+       */
       const isWorkflow = language instanceof GitLabWorkflowLanguageModel
       const messages = isOpenaiOauth
         ? input.messages
@@ -193,23 +232,22 @@ const live: Layer.Layer<
         },
       )
 
-      const tools = resolveTools(input)
+      const tools = resolveTools(input)//调用 resolveTools 过滤工具——根据权限规则移除被禁用的工具，根据 user.tools 黑名单移除用户排除的工具
 
-      // LiteLLM and some Anthropic proxies require the tools parameter to be present
-      // when message history contains tool calls, even if no tools are being used.
-      // Add a dummy tool that is never called to satisfy this validation.
-      // This is enabled for:
-      // 1. Providers with "litellm" in their ID or API ID (auto-detected)
-      // 2. Providers with explicit "litellmProxy: true" option (opt-in for custom gateways)
+      // LiteLLM 和部分 Anthropic 代理要求：当消息历史中包含工具调用时，
+      // 即使当前不使用任何工具，也必须传入 tools 参数。
+      // 因此添加一个永远不会被调用的占位工具来满足该校验。
+      // 启用条件：
+      // 1. Provider 的 ID 或 API ID 中包含 "litellm"（自动检测）
+      // 2. Provider 显式设置了 "litellmProxy: true" 选项（用于自定义网关的手动启用）
       const isLiteLLMProxy =
         item.options?.["litellmProxy"] === true ||
         input.model.providerID.toLowerCase().includes("litellm") ||
         input.model.api.id.toLowerCase().includes("litellm")
 
-      // LiteLLM/Bedrock rejects requests where the message history contains tool
-      // calls but no tools param is present. When there are no active tools (e.g.
-      // during compaction), inject a stub tool to satisfy the validation requirement.
-      // The stub description explicitly tells the model not to call it.
+      // LiteLLM/Bedrock 会拒绝消息历史中包含工具调用但缺少 tools 参数的请求。
+      // 当没有可用工具时（例如压缩阶段），注入一个占位工具以满足校验要求。
+      // 该占位工具的描述中明确告知模型不要调用它。
       if (
         (isLiteLLMProxy || input.model.providerID.includes("github-copilot")) &&
         Object.keys(tools).length === 0 &&
@@ -227,9 +265,8 @@ const live: Layer.Layer<
         })
       }
 
-      // Wire up toolExecutor for DWS workflow models so that tool calls
-      // from the workflow service are executed via opencode's tool system
-      // and results sent back over the WebSocket.
+      // 为 DWS workflow 模型接入 toolExecutor，使 workflow 服务发起的工具调用
+      // 通过 opencode 的工具系统执行，并将结果通过 WebSocket 返回。
       if (language instanceof GitLabWorkflowLanguageModel) {
         const workflowModel = language as GitLabWorkflowLanguageModel & {
           sessionID?: string
@@ -238,7 +275,7 @@ const live: Layer.Layer<
         }
         workflowModel.sessionID = input.sessionID
         workflowModel.systemPrompt = system.join("\n")
-        workflowModel.toolExecutor = async (toolName, argsJson, _requestID) => {
+        workflowModel.toolExecutor = async (toolName, argsJson, _requestID) => {//注册工具执行器：GitLab Workflow 是服务端驱动的模型，工具调用通过 WebSocket 回传给客户端执行。这个回调接收工具名和参数 JSON，在本地查找对应的 tool 定义并执行，返回结果
           const t = tools[toolName]
           if (!t || !t.execute) {
             return { result: "", error: `Unknown tool: ${toolName}` }
@@ -270,8 +307,8 @@ const live: Layer.Layer<
         const approvedToolsForSession = new Set<string>()
         workflowModel.approvalHandler = Instance.bind(async (approvalTools) => {
           const uniqueNames = [...new Set(approvalTools.map((t: { name: string }) => t.name))] as string[]
-          // Auto-approve tools that were already approved in this session
-          // (prevents infinite approval loops for server-side MCP tools)
+          // 自动批准本次会话中已批准过的工具
+          // （防止服务端 MCP 工具陷入无限审批循环）
           if (uniqueNames.every((name) => approvedToolsForSession.has(name))) {
             return { approved: true }
           }
@@ -314,6 +351,10 @@ const live: Layer.Layer<
         })
       }
 
+      /**如果启用了 OpenTelemetry，用 Proxy 包装 tracer，拦截 startSpan 方法——
+       * 在每个 span 创建时自动注入 session.id 属性。Effect.serviceOption 尝试获取可选服务，
+       * 不存在时返回 Option.None而非报错。
+      */
       const tracer = cfg.experimental?.openTelemetry
         ? Option.getOrUndefined(yield* Effect.serviceOption(OtelTracer.OtelTracer))
         : undefined
@@ -330,12 +371,18 @@ const live: Layer.Layer<
           })
         : undefined
 
+      // TODO zouwenwen.5 工具调用原理
       return streamText({
         onError(error) {
           l.error("stream error", {
             error,
           })
         },
+        /**
+         *   工具名修复（366-386）：experimental_repairToolCall — 当模型输出的工具名匹配失败时的修复逻辑：
+         *   - 先尝试小写化匹配（如模型输出 ReadFile 但实际注册的是 readfile）
+         *   - 如果仍无法匹配，将调用重定向到名为 invalid 的工具，并把原始工具名和错误信息作为参数传入，让 agent 知道调用失败了
+         */
         async experimental_repairToolCall(failed) {
           const lower = failed.toolCall.toolName.toLowerCase()
           if (lower !== failed.toolCall.toolName && tools[lower]) {
@@ -411,11 +458,21 @@ const live: Layer.Layer<
       })
     })
 
+    /**
+     *   stream(input) 被调用
+     *     → Scope 创建（Stream.scoped）
+     *       → AbortController 创建并注册 finalizer（acquireRelease）
+     *         → run() 执行：构造 system prompt、解析 provider options、调用 streamText 建立连接
+     *           → fullStream 被适配为 Effect Stream，逐个 yield 事件（text-delta、tool-call 等）
+     *     → 流结束时 Scope 关闭 → ctrl.abort() 被调用 → 底层 HTTP 请求被取消
+     * @param input
+     */
     const stream: Interface["stream"] = (input) =>
-      Stream.scoped(
-        Stream.unwrap(
+      Stream.scoped(//将一个需要 Scope 的 Stream 转换为不需要 Scope 的 Stream。它会自动创建一个 Scope，在流结束（正常完成、出错、或被中断）时执行 scope 内注册的所有 finalizer
+        Stream.unwrap(//Stream.unwrap 接收一个 Effect<Stream<A, E>> 并将其"展开"为 Stream<A, E>
           Effect.gen(function* () {
             const ctrl = yield* Effect.acquireRelease(
+              // TODO zouwenwen.5 AbortController设计原理
               Effect.sync(() => new AbortController()),
               (ctrl) => Effect.sync(() => ctrl.abort()),
             )
@@ -450,8 +507,8 @@ function resolveTools(input: Pick<StreamInput, "tools" | "agent" | "permission" 
   return Record.filter(input.tools, (_, k) => input.user.tools?.[k] !== false && !disabled.has(k))
 }
 
-// Check if messages contain any tool-call content
-// Used to determine if a dummy tool should be added for LiteLLM proxy compatibility
+// 检查消息中是否包含工具调用内容
+// 用于判断是否需要为 LiteLLM 代理兼容性添加占位工具
 export function hasToolCalls(messages: ModelMessage[]): boolean {
   for (const msg of messages) {
     if (!Array.isArray(msg.content)) continue

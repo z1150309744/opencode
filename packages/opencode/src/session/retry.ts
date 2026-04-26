@@ -109,7 +109,13 @@ export function policy(opts: {
 }) {
   return Schedule.fromStepWithMetadata(
     Effect.succeed((meta: Schedule.InputMetadata<unknown>) => {
-      const error = opts.parse(meta.input)
+      const error = opts.parse(meta.input) //用 parse 将原始错误转为标准化的 NamedError 对象
+      /**
+       * - 上下文溢出错误 → 不重试（返回 undefined）
+       * - API 错误且 isRetryable 或 5xx → 可重试
+       * - 速率限制相关消息 → 可重试
+       * - 其他 → 不重试
+       */
       const message = retryable(error)
       if (!message) return Cause.done(meta.attempt)
       return Effect.gen(function* () {

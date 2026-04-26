@@ -128,7 +128,7 @@ export const ReplyInput = Schema.Struct({
 export type ReplyInput = Schema.Schema.Type<typeof ReplyInput>
 
 export interface Interface {
-  readonly ask: (input: AskInput) => Effect.Effect<void, Error>
+  readonly ask: (input: AskInput) => Effect.Effect<void, Error> //Permission.ask
   readonly reply: (input: ReplyInput) => Effect.Effect<void>
   readonly list: () => Effect.Effect<ReadonlyArray<Request>>
 }

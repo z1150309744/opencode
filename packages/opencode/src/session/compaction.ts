@@ -72,7 +72,7 @@ export interface Interface {
     tokens: MessageV2.Assistant["tokens"]
     model: Provider.Model
   }) => Effect.Effect<boolean>
-  readonly prune: (input: { sessionID: SessionID }) => Effect.Effect<void>
+  readonly prune: (input: { sessionID: SessionID }) => Effect.Effect<void> //SessionCompaction.prune
   readonly process: (input: {
     parentID: MessageID
     messages: MessageV2.WithParts[]
@@ -180,23 +180,23 @@ export const layer: Layer.Layer<
         .pipe(Effect.catchIf(NotFoundError.isInstance, () => Effect.succeed(undefined)))
       if (!msgs) return
 
-      let total = 0
-      let pruned = 0
-      const toPrune: MessageV2.ToolPart[] = []
-      let turns = 0
+      let total = 0 //扫描到的所有已完成工具输出的估算 token 总量
+      let pruned = 0 //超过保护阈值后、准备被修剪的 token 量
+      const toPrune: MessageV2.ToolPart[] = [] //收集需要被修剪的 ToolPart 数组
+      let turns = 0 //用户消息计数器，用于跳过最近的对话轮次
 
       loop: for (let msgIndex = msgs.length - 1; msgIndex >= 0; msgIndex--) {
         const msg = msgs[msgIndex]
         if (msg.info.role === "user") turns++
-        if (turns < 2) continue
+        if (turns < 2) continue //跳过最近 1 轮对话
         if (msg.info.role === "assistant" && msg.info.summary) break loop
         for (let partIndex = msg.parts.length - 1; partIndex >= 0; partIndex--) {
           const part = msg.parts[partIndex]
           if (part.type === "tool")
             if (part.state.status === "completed") {
               if (PRUNE_PROTECTED_TOOLS.includes(part.tool)) continue
-              if (part.state.time.compacted) break loop
-              const estimate = Token.estimate(part.state.output)
+              if (part.state.time.compacted) break loop //如果这个 part 已经被标记过 compacted（之前修剪过），说明再往前的内容也已经被处理过了，直接跳出整个循环。这保证不会重复修剪
+              const estimate = Token.estimate(part.state.output) //用 Token.estimate 估算这个工具输出的 token 数。这是一个近似计算（通常按字符数除以某个系数）
               total += estimate
               if (total > PRUNE_PROTECT) {
                 pruned += estimate
@@ -207,7 +207,7 @@ export const layer: Layer.Layer<
       }
 
       log.info("found", { pruned, total })
-      if (pruned > PRUNE_MINIMUM) {
+      if (pruned > PRUNE_MINIMUM) { //只有当可修剪的量超过 20000 tokens 时才值得执行修剪操作。如果只有很少的内容可以清理，修剪带来的收益不足，跳过
         for (const part of toPrune) {
           if (part.state.status === "completed") {
             part.state.time.compacted = Date.now()

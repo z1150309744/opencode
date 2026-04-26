@@ -383,7 +383,7 @@ export interface Interface {
   readonly updateMessage: <T extends MessageV2.Info>(msg: T) => Effect.Effect<T>
   readonly removeMessage: (input: { sessionID: SessionID; messageID: MessageID }) => Effect.Effect<MessageID>
   readonly removePart: (input: { sessionID: SessionID; messageID: MessageID; partID: PartID }) => Effect.Effect<PartID>
-  readonly getPart: (input: {
+  readonly getPart: (input: { //Session.getPart
     sessionID: SessionID
     messageID: MessageID
     partID: PartID

@@ -43,7 +43,7 @@ export interface Handle {
       attachments?: MessageV2.FilePart[]
     },
   ) => Effect.Effect<void>
-  readonly process: (streamInput: LLM.StreamInput) => Effect.Effect<Result>
+  readonly process: (streamInput: LLM.StreamInput) => Effect.Effect<Result> //SessionProcessor.process
 }
 
 type Input = {
@@ -53,7 +53,7 @@ type Input = {
 }
 
 export interface Interface {
-  readonly create: (input: Input) => Effect.Effect<Handle>
+  readonly create: (input: Input) => Effect.Effect<Handle> //SessionProcessor.create
 }
 
 type ToolCall = {
@@ -113,22 +113,23 @@ export const layer: Layer.Layer<
       // Pre-capture snapshot before the LLM stream starts. The AI SDK
       // may execute tools internally before emitting start-step events,
       // so capturing inside the event handler can be too late.
-      const initialSnapshot = yield* snapshot.track()
+      const initialSnapshot = yield* snapshot.track() //捕获文件快照
       const ctx: ProcessorContext = {
-        assistantMessage: input.assistantMessage,
-        sessionID: input.sessionID,
+        assistantMessage: input.assistantMessage, //当前正在构建的 assistant 消息
+        sessionID: input.sessionID, //活跃的工具调用 {callID → {partID, done: Deferred}}
         model: input.model,
         toolcalls: {},
-        shouldBreak: false,
-        snapshot: initialSnapshot,
-        blocked: false,
-        needsCompaction: false,
-        currentText: undefined,
-        reasoningMap: {},
+        shouldBreak: false, //权限被拒绝时是否应该中止循环
+        snapshot: initialSnapshot, //当前步骤开始时的文件快照 ID
+        blocked: false, //标记是否因为权限拒绝而阻塞
+        needsCompaction: false, //标记是否需要上下文压缩（token 超限时触发）
+        currentText: undefined, //正在流式拼接的文本 part
+        reasoningMap: {}, //正在流式拼接的 reasoning part（按 ID 索引）
       }
       let aborted = false
       const slog = log.clone().tag("session.id", input.sessionID).tag("messageID", input.assistantMessage.id)
 
+      // 将任意错误标准化为 MessageV2 的错误格式。它会捕获 provider 信息和是否主动中止的状态，用于后续的错误分类（比如区分上下文溢出、API 错误、中止等不同情况）
       const parse = (e: unknown) =>
         MessageV2.fromError(e, {
           providerID: input.model.providerID,
@@ -464,6 +465,14 @@ export const layer: Layer.Layer<
         }
       })
 
+      /**
+       *   - 处理残留的文件快照 patch
+       *   - 关闭未结束的 text part 和 reasoning part（补上 time.end）
+       *   - 等待所有活跃工具调用完成（最多 250ms 超时）
+       *   - 将超时未完成的工具调用标记为 error: "Tool execution aborted"
+       *   - 设定 assistantMessage.time.completed 时间戳
+       *   - 持久化最终的 assistant 消息状态
+       */
       const cleanup = Effect.fn("SessionProcessor.cleanup")(function* () {
         if (ctx.snapshot) {
           const patch = yield* snapshot.patch(ctx.snapshot)
@@ -542,21 +551,26 @@ export const layer: Layer.Layer<
 
       const process = Effect.fn("SessionProcessor.process")(function* (streamInput: LLM.StreamInput) {
         slog.info("process")
-        ctx.needsCompaction = false
+        ctx.needsCompaction = false //process 可能在同一个 Handle 生命周期内被多次调用（外层 loop 驱动），每次进入时都要清除上一轮的压缩信号，避免误判
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
 
         return yield* Effect.gen(function* () {
           yield* Effect.gen(function* () {
             ctx.currentText = undefined
             ctx.reasoningMap = {}
-            const stream = llm.stream(streamInput)
+            const stream = llm.stream(streamInput) // TODO zouwenwen.5 看看实现方式
 
             yield* stream.pipe(
+              /**
+               *  对流中每个事件执行 handleEvent（第 221-466 行的巨型 switch）。tap 不改变流元素，只产生副作用：写入消息
+               *   part、更新工具调用状态、发布 bus 事件等
+               */
               Stream.tap((event) => handleEvent(event)),
-              Stream.takeUntil(() => ctx.needsCompaction),
-              Stream.runDrain,
+              Stream.takeUntil(() => ctx.needsCompaction), //一旦检测到 token 溢出，不再处理后续事件，直接进入压缩流程
+              Stream.runDrain,//执行 Stream 中的所有元素，但丢弃所有输出值，只保留副作用 类似 forEach，只执行，不收集结果
             )
           }).pipe(
+            //中断处理器。当用户按 Ctrl+C 或 fiber 被外部中断时
             Effect.onInterrupt(() =>
               Effect.gen(function* () {
                 aborted = true
@@ -565,9 +579,10 @@ export const layer: Layer.Layer<
                 }
               }),
             ),
+            //这确保了：中断 = 不重试直接终止；异常 = 进入重试策略
             Effect.catchCauseIf(
-              (cause) => !Cause.hasInterruptsOnly(cause),
-              (cause) => Effect.fail(Cause.squash(cause)),
+              (cause) => !Cause.hasInterruptsOnly(cause),//如果 cause 仅包含中断（hasInterruptsOnly 为 true）→ 谓词返回 false → 不捕获，让中断信号继续向上传播
+              (cause) => Effect.fail(Cause.squash(cause)),//如果 cause 包含真正的异常（可能混合中断）→ 谓词返回 true → 用 Cause.squash 将复合 cause 压扁为单个错误，转为普通 Effect.fail，使其可以被下面的 retry 和 catch 处理
             ),
             Effect.retry(
               SessionRetry.policy({
@@ -581,7 +596,9 @@ export const layer: Layer.Layer<
                   }),
               }),
             ),
+            //当重试策略耗尽或错误不可重试时，剩余的失败会被 halt 捕获
             Effect.catch(halt),
+            //确保清理。无论成功、失败还是中断，cleanup（第 468-526 行）必定执行
             Effect.ensuring(cleanup()),
           )
 
@@ -592,12 +609,12 @@ export const layer: Layer.Layer<
       })
 
       return {
-        get message() {
+        get message() { //实时获取正在构建的 assistant 消息
           return ctx.assistantMessage
         },
-        updateToolCall,
-        completeToolCall,
-        process,
+        updateToolCall, //修改某个工具调用的 part 数据
+        completeToolCall, //标记某个工具调用成功完成
+        process, //启动 LLM 流处理，返回 "compact"/"stop"/"continue"
       } satisfies Handle
     })
 

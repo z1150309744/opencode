@@ -279,7 +279,7 @@ type State = {
 }
 
 export interface Interface {
-  readonly get: () => Effect.Effect<Info>
+  readonly get: () => Effect.Effect<Info> //Config.get
   readonly getGlobal: () => Effect.Effect<Info>
   readonly getConsoleState: () => Effect.Effect<ConsoleState>
   readonly update: (config: Info) => Effect.Effect<void>
