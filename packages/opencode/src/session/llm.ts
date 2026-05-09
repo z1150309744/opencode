@@ -110,14 +110,14 @@ const live: Layer.Layer<
         providerID: input.model.providerID,
       })
 
-      const [language, cfg, item, info] = yield* Effect.all(
+      const [language, cfg, item, info] = yield* Effect.all(  //将多个 Effect 组合成一个 Effect，并行或顺序执行它们，返回所有结果的集合
         [
           provider.getLanguage(input.model),//AI SDK 的 LanguageModel 实例，是实际发 HTTP 请求的对象
           config.get(),
           provider.getProvider(input.model.providerID), //Provider 元数据（id、options、litellmProxy 等）
           auth.get(input.model.providerID), //该 provider 的认证信息（类型：oauth / api-key / none）
         ],
-        { concurrency: "unbounded" },
+        { concurrency: "unbounded" }, //并行执行所有 effect
       )
 
       // TODO: 移到合适的 hook 中处理
@@ -150,22 +150,26 @@ const live: Layer.Layer<
         system.push(header, rest.join("\n"))
       }
 
+      //非 small 模式下，如果用户指定了变体名（如 "thinking"），从模型预定义的 variants
+      //映射中取出该变体的选项对象。否则为空对象，不产生任何覆盖。
       const variant =
         !input.small && input.model.variants && input.user.model.variant
           ? input.model.variants[input.user.model.variant]
           : {}
       const base = input.small
+        //small 模式（摘要、标题生成）：调用 smallOptions，产出精简配置（通常只保留必要字段，降低 token 消耗）
         ? ProviderTransform.smallOptions(input.model)
+        //调用 options，基于 provider 元数据（item.options）生成完整配置，包含缓存策略、session affinity 等 provider级别参数
         : ProviderTransform.options({
             model: input.model,
             sessionID: input.sessionID,
             providerOptions: item.options,
           })
       const options: Record<string, any> = pipe(
-        base,//small 模式用简化选项，否则用完整选项（包含 provider 级别配置
-        mergeDeep(input.model.options),//模型级别覆盖
-        mergeDeep(input.agent.options),//agent 级别覆盖
-        mergeDeep(variant),//用户选择的模型变体覆盖（如 thinking 变体可能加大 token 限制）
+        base,//provider 通用默认值（如 Anthropic 的 cacheControl、maxTokens 等）
+        mergeDeep(input.model.options),//模型级配置（某个具体模型的特殊参数，如 Claude Opus 独有的选项）
+        mergeDeep(input.agent.options),//agent 级配置（如 coder agent 可能需要更大的输出限制）
+        mergeDeep(variant),//用户选择的变体覆盖（如 thinking 模式加大 budgetTokens）
       )
       if (isOpenaiOauth) {//OpenAI OAuth 模式下，system prompt 走 instructions 字段而非 messages
         options.instructions = system.join("\n")
@@ -198,6 +202,7 @@ const live: Layer.Layer<
               ...input.messages,
             ]
 
+      //让插件修改 LLM 的采样参数和 provider options。
       const params = yield* plugin.trigger(
         "chat.params",
         {
@@ -214,10 +219,11 @@ const live: Layer.Layer<
           topP: input.agent.topP ?? ProviderTransform.topP(input.model),
           topK: ProviderTransform.topK(input.model),
           maxOutputTokens: ProviderTransform.maxOutputTokens(input.model),
-          options,
+          options, //之前分层合并好的完整 providerOptions 对象
         },
       )
 
+      //让插件注入自定义 HTTP 请求头。插件添加认证 token、trace ID、自定义路由标记等
       const { headers } = yield* plugin.trigger(
         "chat.headers",
         {
@@ -232,22 +238,15 @@ const live: Layer.Layer<
         },
       )
 
-      const tools = resolveTools(input)//调用 resolveTools 过滤工具——根据权限规则移除被禁用的工具，根据 user.tools 黑名单移除用户排除的工具
+      const tools = resolveTools(input)//根据权限规则和用户覆盖过滤可用工具列表
 
-      // LiteLLM 和部分 Anthropic 代理要求：当消息历史中包含工具调用时，
-      // 即使当前不使用任何工具，也必须传入 tools 参数。
-      // 因此添加一个永远不会被调用的占位工具来满足该校验。
-      // 启用条件：
-      // 1. Provider 的 ID 或 API ID 中包含 "litellm"（自动检测）
-      // 2. Provider 显式设置了 "litellmProxy: true" 选项（用于自定义网关的手动启用）
+      //当对话历史（input.messages）中包含工具调用记录（tool-call 或 tool-result），但当前轮次的可用工具列表为空时，某些 API
+      //   代理（LiteLLM、GitHub Copilot）会校验失败——它们要求：如果消息中出现了工具调用内容，请求的 tools 字段就不能为空数组。
       const isLiteLLMProxy =
         item.options?.["litellmProxy"] === true ||
         input.model.providerID.toLowerCase().includes("litellm") ||
         input.model.api.id.toLowerCase().includes("litellm")
 
-      // LiteLLM/Bedrock 会拒绝消息历史中包含工具调用但缺少 tools 参数的请求。
-      // 当没有可用工具时（例如压缩阶段），注入一个占位工具以满足校验要求。
-      // 该占位工具的描述中明确告知模型不要调用它。
       if (
         (isLiteLLMProxy || input.model.providerID.includes("github-copilot")) &&
         Object.keys(tools).length === 0 &&
@@ -265,8 +264,8 @@ const live: Layer.Layer<
         })
       }
 
-      // 为 DWS workflow 模型接入 toolExecutor，使 workflow 服务发起的工具调用
-      // 通过 opencode 的工具系统执行，并将结果通过 WebSocket 返回。
+      //解决的核心问题是：GitLab Workflow 是一个服务端驱动的模型（模型运行在 GitLab
+      //服务端，通过 WebSocket 与客户端通信），而 OpenCode 的工具系统是本地的。这段代码在两者之间架起桥梁
       if (language instanceof GitLabWorkflowLanguageModel) {
         const workflowModel = language as GitLabWorkflowLanguageModel & {
           sessionID?: string
@@ -371,7 +370,6 @@ const live: Layer.Layer<
           })
         : undefined
 
-      // TODO zouwenwen.5 工具调用原理
       return streamText({
         onError(error) {
           l.error("stream error", {
@@ -379,8 +377,8 @@ const live: Layer.Layer<
           })
         },
         /**
-         *   工具名修复（366-386）：experimental_repairToolCall — 当模型输出的工具名匹配失败时的修复逻辑：
-         *   - 先尝试小写化匹配（如模型输出 ReadFile 但实际注册的是 readfile）
+         * 当模型输出的工具调用名在 tools 映射表中找不到时触发的修复逻辑
+         *   - 尝试小写化匹配（ReadFile → readfile）
          *   - 如果仍无法匹配，将调用重定向到名为 invalid 的工具，并把原始工具名和错误信息作为参数传入，让 agent 知道调用失败了
          */
         async experimental_repairToolCall(failed) {
@@ -404,15 +402,15 @@ const live: Layer.Layer<
             toolName: "invalid",
           }
         },
-        temperature: params.temperature,
-        topP: params.topP,
-        topK: params.topK,
-        providerOptions: ProviderTransform.providerOptions(input.model, params.options),
-        activeTools: Object.keys(tools).filter((x) => x !== "invalid"),
-        tools,
-        toolChoice: input.toolChoice,
+        temperature: params.temperature, //控制模型输出的随机性。值越高输出越多样，值越低越确定
+        topP: params.topP, //核采样（nucleus sampling），只从累计概率前 P% 的 token 中选择
+        topK: params.topK, //只从概率最高的前 K 个 token 中选择
+        providerOptions: ProviderTransform.providerOptions(input.model, params.options), //provider 特有的扩展参数。例如 Anthropic 的 cacheControl、budgetTokens（thinking 模式）等
+        activeTools: Object.keys(tools).filter((x) => x !== "invalid"), //告诉模型当前轮次可以调用哪些工具
+        tools, //完整的工具定义映射表（toolName → Tool），包含每个工具的 schema 和 execute 函数
+        toolChoice: input.toolChoice, //控制模型是否必须调用工具
         maxOutputTokens: params.maxOutputTokens,
-        abortSignal: input.abort,
+        abortSignal: input.abort, //传入 AbortController.signal，允许外部取消正在进行的 HTTP 请求
         headers: {
           ...(input.model.providerID.startsWith("opencode")
             ? {
@@ -465,7 +463,7 @@ const live: Layer.Layer<
      *         → run() 执行：构造 system prompt、解析 provider options、调用 streamText 建立连接
      *           → fullStream 被适配为 Effect Stream，逐个 yield 事件（text-delta、tool-call 等）
      *     → 流结束时 Scope 关闭 → ctrl.abort() 被调用 → 底层 HTTP 请求被取消
-     * @param input
+     * @param input LLM.stream实现
      */
     const stream: Interface["stream"] = (input) =>
       Stream.scoped(//将一个需要 Scope 的 Stream 转换为不需要 Scope 的 Stream。它会自动创建一个 Scope，在流结束（正常完成、出错、或被中断）时执行 scope 内注册的所有 finalizer

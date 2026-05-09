@@ -23,7 +23,7 @@ export type RevertInput = z.infer<typeof RevertInput>
 export interface Interface {
   readonly revert: (input: RevertInput) => Effect.Effect<Session.Info>
   readonly unrevert: (input: { sessionID: SessionID }) => Effect.Effect<Session.Info>
-  readonly cleanup: (session: Session.Info) => Effect.Effect<void>
+  readonly cleanup: (session: Session.Info) => Effect.Effect<void> //SessionRevert.cleanup
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionRevert") {}
@@ -100,7 +100,9 @@ export const layer = Layer.effect(
       return yield* sessions.get(input.sessionID)
     })
 
+    // TODO zouwenwen.5 试验一下这个功能如何触发
     const cleanup = Effect.fn("SessionRevert.cleanup")(function* (session: Session.Info) {
+      //不涉及文件操作，只做消息删除和事件广播
       if (!session.revert) return
       const sessionID = session.id
       const msgs = yield* sessions.messages({ sessionID })
@@ -113,18 +115,19 @@ export const layer = Layer.effect(
           remove.push(msg)
           continue
         }
-        if (session.revert.partID) {
-          target = msg
+        if (session.revert.partID) {//如果 revert 指定了 partID，说明是部分撤销
+          target = msg  //标记为需要部分截断的目标
           continue
         }
         remove.push(msg)
       }
-      for (const msg of remove) {
+      for (const msg of remove) { //遍历所有需要整条删除的消息，通过 SyncEvent.run 发出 MessageV2.Event.Removed事件，通知前端（TUI/Web/Desktop）移除这些消息的展示
         SyncEvent.run(MessageV2.Event.Removed, {
           sessionID,
           messageID: msg.info.id,
         })
       }
+      //当 revert 精确到某个 part 时，不删整条消息，而是在该消息内找到指定的 partID，将它及其之后的所有 part 切掉，并逐一广播PartRemoved 事件
       if (session.revert.partID && target) {
         const partID = session.revert.partID
         const idx = target.parts.findIndex((part) => part.id === partID)

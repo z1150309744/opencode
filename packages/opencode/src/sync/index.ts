@@ -11,23 +11,30 @@ import { EventID } from "./schema"
 import { Flag } from "@/flag/flag"
 
 export type Definition = {
+  // 事件类型标识，如 "session.created"、"session.updated"
   type: string
+  // 事件版本号，用于支持 schema 演进和多版本共存
   version: number
+  // 聚合根字段名，如 "sessionID"，标识事件按哪个字段分组（同一聚合体的事件共享序列号）
   aggregate: string
+  // 事件数据的 Zod schema，定义事件 payload 的完整结构和校验规则
   schema: z.ZodObject
-
-  // This is temporary and only exists for compatibility with bus
-  // event definitions
+  // 总线发布时使用的 schema（可能与 schema 不同），用于 bus 兼容性
   properties: z.ZodObject
 }
 
 export type Event<Def extends Definition = Definition> = {
+  // 事件唯一 ID（ULID），全局唯一标识这条事件记录
   id: string
+  // 序列号，同一聚合体内递增，用于保证事件顺序和幂等重放
   seq: number
+  // 聚合根 ID 的值，如具体的 sessionID，标识这条事件属于哪个聚合体实例
   aggregateID: string
+  // 事件携带的数据，类型由 Definition.schema 推导
   data: z.infer<Def["schema"]>
 }
 
+// 序列化后的事件，额外携带 type 字段用于反序列化时路由到正确的 Definition
 export type SerializedEvent<Def extends Definition = Definition> = Event<Def> & { type: string }
 
 type ProjectorFunc = (db: Database.TxOrDb, data: unknown) => void

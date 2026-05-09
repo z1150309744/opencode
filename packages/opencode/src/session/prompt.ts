@@ -920,9 +920,10 @@ ${exists ? `计划文件已存在于 ${plan}。你可以阅读它并使用 edit 
     })
 
     const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (input: PromptInput) {
+      //确定本次对话使用哪个 agent。优先用用户指定的 input.agent，否则取默认 agent
       const agentName = input.agent || (yield* agents.defaultAgent())
       const ag = yield* agents.get(agentName)
-      if (!ag) {
+      if (!ag) { //找不到则发布错误事件并抛出异常，附带可用 agent 列表作为提示
         const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
         const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
         const error = new NamedError.Unknown({ message: `Agent not found: "${agentName}".${hint}` })
@@ -930,7 +931,7 @@ ${exists ? `计划文件已存在于 ${plan}。你可以阅读它并使用 edit 
         throw error
       }
 
-      const model = input.model ?? ag.model ?? (yield* lastModel(input.sessionID))
+      const model = input.model ?? ag.model ?? (yield* lastModel(input.sessionID))  //型选择的优先级：input.model > agent.model > 上次会话使用的模型
       const same = ag.model && model.providerID === ag.model.providerID && model.modelID === ag.model.modelID
       const full =
         !input.variant && ag.variant && same
@@ -965,11 +966,11 @@ ${exists ? `计划文件已存在于 ${plan}。你可以阅读它并使用 edit 
       const resolvePart: (part: PromptInput["parts"][number]) => Effect.Effect<Draft<MessageV2.Part>[]> = Effect.fn(
         "SessionPrompt.resolveUserPart",
       )(function* (part) {
-        if (part.type === "file") {
+        if (part.type === "file") { //文件 part 有三种来源：MCP resource、data URL、file URL
           if (part.source?.type === "resource") {
             const { clientName, uri } = part.source
             log.info("mcp resource", { clientName, uri, mime: part.mime })
-            const pieces: Draft<MessageV2.Part>[] = [
+            const pieces: Draft<MessageV2.Part>[] = [ //创建一条 synthetic text part 作为"前言"，告诉 LLM "正在读取某个 MCP 资源"
               {
                 messageID: info.id,
                 sessionID: input.sessionID,
@@ -993,6 +994,7 @@ ${exists ? `计划文件已存在于 ${plan}。你可以阅读它并使用 edit 
                     text: c.text,
                   })
                 } else if ("blob" in c && c.blob) {
+                  //如果内容是二进制 blob（如图片），无法直接作为文本展示给 LLM，所以生成一条占位说明 [Binary content: image/png]
                   const mime = "mimeType" in c ? c.mimeType : part.mime
                   pieces.push({
                     messageID: info.id,
@@ -1003,6 +1005,7 @@ ${exists ? `计划文件已存在于 ${plan}。你可以阅读它并使用 edit 
                   })
                 }
               }
+              //最后把原始 file part 也保留下来（包含 URL、mime 等元信息），作为消息的附件记录
               pieces.push({ ...part, messageID: info.id, sessionID: input.sessionID })
             } else {
               const error = Cause.squash(exit.cause)
@@ -1020,7 +1023,7 @@ ${exists ? `计划文件已存在于 ${plan}。你可以阅读它并使用 edit 
           }
           const url = new URL(part.url)
           switch (url.protocol) {
-            case "data:":
+            case "data:": //意味着文件内容直接内嵌在 URL 中（base64 编码）
               if (part.mime === "text/plain") {
                 return [
                   {
@@ -1028,7 +1031,8 @@ ${exists ? `计划文件已存在于 ${plan}。你可以阅读它并使用 edit 
                     sessionID: input.sessionID,
                     type: "text",
                     synthetic: true,
-                    // 使用名为“Read”的工具，并输入以下内容
+                    // 模拟 Read 工具调用的输入描述
+                    // 这让 LLM 的上下文格式与正常工具调用结果一致——LLM 看到的效果就像是系统调用了 Read工具读取了这个文件
                     text: `Called the Read tool with the following input: ${JSON.stringify({ filePath: part.filename })}`,
                   },
                   {
@@ -1036,9 +1040,10 @@ ${exists ? `计划文件已存在于 ${plan}。你可以阅读它并使用 edit 
                     sessionID: input.sessionID,
                     type: "text",
                     synthetic: true,
+                    //解码为实际文本内容。这是 LLM 真正会"读"到的文件内容
                     text: decodeDataUrl(part.url),
                   },
-                  { ...part, messageID: info.id, sessionID: input.sessionID },
+                  { ...part, messageID: info.id, sessionID: input.sessionID },  //保留原始 file part 作为附件元数据记录
                 ]
               }
               break
@@ -1047,6 +1052,7 @@ ${exists ? `计划文件已存在于 ${plan}。你可以阅读它并使用 edit 
               const filepath = fileURLToPath(part.url)
               if (yield* fsys.isDir(filepath)) part.mime = "application/x-directory"
 
+              // TODO zouwenwen.5 后续理解下
               const { read } = yield* registry.named()
               const execRead = (args: Parameters<typeof read.execute>[0], extra?: Tool.Context["extra"]) => {
                 const controller = new AbortController()
@@ -1090,7 +1096,7 @@ ${exists ? `计划文件已存在于 ${plan}。你可以阅读它并使用 edit 
                 }
                 const args = { filePath: filepath, offset, limit }
                 const pieces: Draft<MessageV2.Part>[] = [
-                  {
+                  {//生成模拟工具调用的 synthetic text。LLM 看到后会认为系统已经调用了 Read 工具
                     messageID: info.id,
                     sessionID: input.sessionID,
                     type: "text",
@@ -1112,7 +1118,7 @@ ${exists ? `计划文件已存在于 ${plan}。你可以阅读它并使用 edit 
                     text: result.output,
                   })
                   if (result.attachments?.length) {
-                    pieces.push(
+                    pieces.push(  //read 工具返回了附件（比如读取 PDF/图片时 read 工具会生成图片附件），使用这些附件
                       ...result.attachments.map((a) => ({
                         ...a,
                         synthetic: true,
@@ -1121,7 +1127,7 @@ ${exists ? `计划文件已存在于 ${plan}。你可以阅读它并使用 edit 
                         sessionID: input.sessionID,
                       })),
                     )
-                  } else {
+                  } else {  //保留原始 file part作为元数据记录
                     pieces.push({ ...part, messageID: info.id, sessionID: input.sessionID })
                   }
                 } else {
@@ -1164,6 +1170,7 @@ ${exists ? `计划文件已存在于 ${plan}。你可以阅读它并使用 edit 
                     },
                   ]
                 }
+                //成功时返回三个 part：模拟工具调用文本 + 目录内容列表 + 原始 file part 元数据
                 return [
                   {
                     messageID: info.id,
@@ -1210,6 +1217,7 @@ ${exists ? `计划文件已存在于 ${plan}。你可以阅读它并使用 edit 
 
         if (part.type === "agent") {
           const perm = Permission.evaluate("task", part.name, ag.permission)
+          // 如果权限被 deny，加一个 hint 告诉 LLM "这是用户直接发起的，保证 agent 存在"。否则 LLM 可能因为看到权限限制而犹豫不调用 task工具。
           const hint = perm.action === "deny" ? " . Invoked by user; guaranteed to exist." : ""
           return [
             { ...part, messageID: info.id, sessionID: input.sessionID },
@@ -1219,7 +1227,7 @@ ${exists ? `计划文件已存在于 ${plan}。你可以阅读它并使用 edit 
               type: "text",
               synthetic: true,
               text:
-                " Use the above message and context to generate a prompt and call the task tool with subagent: " +
+                " 利用上述信息和背景内容生成一个提示，并通过子代理调用任务工具 : " +
                 part.name +
                 hint,
             },
@@ -1234,7 +1242,7 @@ ${exists ? `计划文件已存在于 ${plan}。你可以阅读它并使用 edit 
       )
 
       yield* plugin.trigger(
-        "chat.message",
+        "chat.message", //触发 chat.message 插件钩子，允许插件在消息持久化前修改消息内容或 parts
         {
           sessionID: input.sessionID,
           agent: input.agent,
@@ -1280,7 +1288,7 @@ ${exists ? `计划文件已存在于 ${plan}。你可以阅读它并使用 edit 
         const session = yield* sessions.get(input.sessionID)
         yield* revert.cleanup(session)
         const message = yield* createUserMessage(input)
-        yield* sessions.touch(input.sessionID) //更新会话的最后活跃时间戳
+        yield* sessions.touch(input.sessionID)
 
         const permissions: Permission.Ruleset = []
         for (const [t, enabled] of Object.entries(input.tools ?? {})) {

@@ -61,7 +61,7 @@ export interface Interface {
   //   会无限增长，造成内存泄漏。而且已经处理完的消息不再需要去重追踪，清理掉是合理的。
   //
   //   简单来说，clear 就是一个内存清理操作，删除该消息不再需要的指令文件去重记录。
-  readonly clear: (messageID: MessageID) => Effect.Effect<void>
+  readonly clear: (messageID: MessageID) => Effect.Effect<void> //Instruction.clear
   readonly systemPaths: () => Effect.Effect<Set<string>, AppFileSystem.Error>
   readonly system: () => Effect.Effect<string[], AppFileSystem.Error>
   readonly find: (dir: string) => Effect.Effect<string | undefined, AppFileSystem.Error>

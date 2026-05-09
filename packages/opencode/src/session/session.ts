@@ -364,23 +364,23 @@ export interface Interface {
     workspaceID?: WorkspaceID
   }) => Effect.Effect<Info>
   readonly fork: (input: { sessionID: SessionID; messageID?: MessageID }) => Effect.Effect<Info>
-  readonly touch: (sessionID: SessionID) => Effect.Effect<void>
-  readonly get: (id: SessionID) => Effect.Effect<Info>
+  readonly touch: (sessionID: SessionID) => Effect.Effect<void> //Session.touch
+  readonly get: (id: SessionID) => Effect.Effect<Info> //Session.get
   readonly setTitle: (input: { sessionID: SessionID; title: string }) => Effect.Effect<void>
   readonly setArchived: (input: { sessionID: SessionID; time?: number }) => Effect.Effect<void>
-  readonly setPermission: (input: { sessionID: SessionID; permission: Permission.Ruleset }) => Effect.Effect<void>
+  readonly setPermission: (input: { sessionID: SessionID; permission: Permission.Ruleset }) => Effect.Effect<void>  //Session.setPermission
   readonly setRevert: (input: {
     sessionID: SessionID
     revert: Info["revert"]
     summary: Info["summary"]
   }) => Effect.Effect<void>
-  readonly clearRevert: (sessionID: SessionID) => Effect.Effect<void>
+  readonly clearRevert: (sessionID: SessionID) => Effect.Effect<void> //Session.clearRevert
   readonly setSummary: (input: { sessionID: SessionID; summary: Info["summary"] }) => Effect.Effect<void>
   readonly diff: (sessionID: SessionID) => Effect.Effect<Snapshot.FileDiff[]>
-  readonly messages: (input: { sessionID: SessionID; limit?: number }) => Effect.Effect<MessageV2.WithParts[]>
+  readonly messages: (input: { sessionID: SessionID; limit?: number }) => Effect.Effect<MessageV2.WithParts[]> //Session.messages
   readonly children: (parentID: SessionID) => Effect.Effect<Info[]>
   readonly remove: (sessionID: SessionID) => Effect.Effect<void>
-  readonly updateMessage: <T extends MessageV2.Info>(msg: T) => Effect.Effect<T>
+  readonly updateMessage: <T extends MessageV2.Info>(msg: T) => Effect.Effect<T>  //Session.updateMessage
   readonly removeMessage: (input: { sessionID: SessionID; messageID: MessageID }) => Effect.Effect<MessageID>
   readonly removePart: (input: { sessionID: SessionID; messageID: MessageID; partID: PartID }) => Effect.Effect<PartID>
   readonly getPart: (input: { //Session.getPart
@@ -388,7 +388,7 @@ export interface Interface {
     messageID: MessageID
     partID: PartID
   }) => Effect.Effect<MessageV2.Part | undefined>
-  readonly updatePart: <T extends MessageV2.Part>(part: T) => Effect.Effect<T>
+  readonly updatePart: <T extends MessageV2.Part>(part: T) => Effect.Effect<T>  //Session.updatePart
   readonly updatePartDelta: (input: {
     sessionID: SessionID
     messageID: MessageID

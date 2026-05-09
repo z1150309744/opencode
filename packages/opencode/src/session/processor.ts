@@ -219,6 +219,7 @@ export const layer: Layer.Layer<
       })
 
       const handleEvent = Effect.fnUntraced(function* (value: StreamEvent) {
+        // log.info(`[custom stream Event] ${JSON.stringify(value, null, 2)}`)
         switch (value.type) {
           case "start":
             yield* status.set(ctx.sessionID, { type: "busy" })

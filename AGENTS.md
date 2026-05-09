@@ -1,90 +1,90 @@
-- To regenerate the JavaScript SDK, run `./packages/sdk/js/script/build.ts`.
-- ALWAYS USE PARALLEL TOOLS WHEN APPLICABLE.
-- The default branch in this repo is `dev`.
-- Local `main` ref may not exist; use `dev` or `origin/dev` for diffs.
-- Prefer automation: execute requested actions without confirmation unless blocked by missing info or safety/irreversibility.
+- 要重新生成 JavaScript SDK，运行 `./packages/sdk/js/script/build.ts`。
+- 适用时务必使用并行工具。
+- 本仓库的默认分支是 `dev`。
+- 本地 `main` 引用可能不存在；使用 `dev` 或 `origin/dev` 进行差异比较。
+- 优先自动化：除非因缺少信息或安全性/不可逆性而受阻，否则无需确认直接执行请求的操作。
 
-## Style Guide
+## 代码风格指南
 
-### General Principles
+### 通用原则
 
-- Keep things in one function unless composable or reusable
-- Avoid `try`/`catch` where possible
-- Avoid using the `any` type
-- Use Bun APIs when possible, like `Bun.file()`
-- Rely on type inference when possible; avoid explicit type annotations or interfaces unless necessary for exports or clarity
-- Prefer functional array methods (flatMap, filter, map) over for loops; use type guards on filter to maintain type inference downstream
-- In `src/config`, follow the existing self-export pattern at the top of the file (for example `export * as ConfigAgent from "./agent"`) when adding a new config module.
+- 除非需要可组合或可复用，否则将逻辑保持在一个函数中
+- 尽可能避免使用 `try`/`catch`
+- 避免使用 `any` 类型
+- 尽可能使用 Bun API，如 `Bun.file()`
+- 尽可能依赖类型推断；除非导出或清晰度需要，否则避免显式类型注解或接口
+- 优先使用函数式数组方法（flatMap、filter、map）而非 for 循环；在 filter 上使用类型守卫以保持下游类型推断
+- 在 `src/config` 中，添加新的配置模块时遵循文件顶部现有的自导出模式（例如 `export * as ConfigAgent from "./agent"`）
 
-Reduce total variable count by inlining when a value is only used once.
+当值仅使用一次时，通过内联来减少变量总数。
 
 ```ts
-// Good
+// 好
 const journal = await Bun.file(path.join(dir, "journal.json")).json()
 
-// Bad
+// 不好
 const journalPath = path.join(dir, "journal.json")
 const journal = await Bun.file(journalPath).json()
 ```
 
-### Destructuring
+### 解构
 
-Avoid unnecessary destructuring. Use dot notation to preserve context.
+避免不必要的解构。使用点号表示法以保留上下文。
 
 ```ts
-// Good
+// 好
 obj.a
 obj.b
 
-// Bad
+// 不好
 const { a, b } = obj
 ```
 
-### Variables
+### 变量
 
-Prefer `const` over `let`. Use ternaries or early returns instead of reassignment.
+优先使用 `const` 而非 `let`。使用三元表达式或提前返回代替重新赋值。
 
 ```ts
-// Good
+// 好
 const foo = condition ? 1 : 2
 
-// Bad
+// 不好
 let foo
 if (condition) foo = 1
 else foo = 2
 ```
 
-### Control Flow
+### 控制流
 
-Avoid `else` statements. Prefer early returns.
+避免 `else` 语句。优先使用提前返回。
 
 ```ts
-// Good
+// 好
 function foo() {
   if (condition) return 1
   return 2
 }
 
-// Bad
+// 不好
 function foo() {
   if (condition) return 1
   else return 2
 }
 ```
 
-### Schema Definitions (Drizzle)
+### Schema 定义（Drizzle）
 
-Use snake_case for field names so column names don't need to be redefined as strings.
+字段名使用 snake_case，这样列名无需重新定义为字符串。
 
 ```ts
-// Good
+// 好
 const table = sqliteTable("session", {
   id: text().primaryKey(),
   project_id: text().notNull(),
   created_at: integer().notNull(),
 })
 
-// Bad
+// 不好
 const table = sqliteTable("session", {
   id: text("id").primaryKey(),
   projectID: text("project_id").notNull(),
@@ -92,12 +92,21 @@ const table = sqliteTable("session", {
 })
 ```
 
-## Testing
+## 测试
 
-- Avoid mocks as much as possible
-- Test actual implementation, do not duplicate logic into tests
-- Tests cannot run from repo root (guard: `do-not-run-tests-from-root`); run from package dirs like `packages/opencode`.
+- 尽可能避免使用 mock
+- 测试实际实现，不要在测试中重复逻辑
+- 测试不能从仓库根目录运行（守卫：`do-not-run-tests-from-root`）；从包目录运行，如 `packages/opencode`。
 
-## Type Checking
+## 类型检查
 
-- Always run `bun typecheck` from package directories (e.g., `packages/opencode`), never `tsc` directly.
+- 始终从包目录（如 `packages/opencode`）运行 `bun typecheck`，不要直接使用 `tsc`。
+
+
+<claude-mem-context>
+# Memory Context
+
+# [opencode] recent context, 2026-05-08 10:33am GMT+8
+
+No previous sessions found.
+</claude-mem-context>

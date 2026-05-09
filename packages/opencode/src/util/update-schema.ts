@@ -1,5 +1,6 @@
 import z from "zod"
 
+//Zod object schema 的所有字段变为"可选且可空"
 export function updateSchema<T extends z.ZodRawShape>(schema: z.ZodObject<T>) {
   const next = {} as {
     [K in keyof T]: z.ZodOptional<z.ZodNullable<T[K]>>

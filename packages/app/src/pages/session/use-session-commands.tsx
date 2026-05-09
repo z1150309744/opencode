@@ -286,6 +286,8 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     })
   }
 
+  // TODO zouwenwen.5 试试
+  // undo 命令
   const undo = async () => {
     const sessionID = params.id
     if (!sessionID) return

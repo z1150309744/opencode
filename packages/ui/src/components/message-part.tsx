@@ -1140,6 +1140,7 @@ export function UserMessageDisplay(props: { message: UserMessage; parts: PartTyp
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={(event) => {
                     event.stopPropagation()
+                    // TODO zouwenwen.5 试试这个功能 消息旁的 reset 按钮
                     revert()
                   }}
                   aria-label={i18n.t("ui.message.revertMessage")}
