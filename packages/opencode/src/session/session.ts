@@ -397,7 +397,7 @@ export interface Interface {
     delta: string
   }) => Effect.Effect<void>
   /** Finds the first message matching the predicate, searching newest-first. */
-  readonly findMessage: (
+  readonly findMessage: ( //Session.findMessage
     sessionID: SessionID,
     predicate: (msg: MessageV2.WithParts) => boolean,
   ) => Effect.Effect<Option.Option<MessageV2.WithParts>>

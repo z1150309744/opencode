@@ -1304,10 +1304,13 @@ ${exists ? `计划文件已存在于 ${plan}。你可以阅读它并使用 edit 
       },
     )
 
+    //取消时的优雅降级返回值
+    // TODO zouwenwen.5 打断后试试这个功能
     const lastAssistant = Effect.fnUntraced(function* (sessionID: SessionID) {
+      //从数据库中从最新到最旧遍历该 session的所有消息，找到第一条满足 m.info.role !== "user" 的消息
       const match = yield* sessions.findMessage(sessionID, (m) => m.info.role !== "user")
       if (Option.isSome(match)) return match.value
-      const msgs = yield* sessions.messages({ sessionID, limit: 1 })
+      const msgs = yield* sessions.messages({ sessionID, limit: 1 })  //返回一条最新的消息，可能是user
       if (msgs.length > 0) return msgs[0]
       throw new Error("Impossible")
     })
