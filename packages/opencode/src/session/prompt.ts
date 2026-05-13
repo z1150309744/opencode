@@ -1329,7 +1329,7 @@ ${exists ? `计划文件已存在于 ${plan}。你可以阅读它并使用 edit 
 
           let msgs = yield* MessageV2.filterCompactedEffect(sessionID) //从数据库中按时间顺序加载某个 session 的所有消息，并过滤掉已被"压缩(compaction)"替代的旧消息，只返回当前有效的消息列表
 
-          let lastUser: MessageV2.User | undefined //当前需要被 LLM 回复的那条用户消息
+          let lastUser: MessageV2.User | undefined //当前需要处理的user消息
           let lastAssistant: MessageV2.Assistant | undefined // 最后一条 assistant 消息的 info（无论是否完成）
           let lastFinished: MessageV2.Assistant | undefined //最后一条已完成的 assistant 消息的 info
           let tasks: (MessageV2.CompactionPart | MessageV2.SubtaskPart)[] = [] //这些 task part 代表当前还在进行中的、未完结的上下文压缩或子任务，后续代码需要知道这些信息来决定是否要继续某个子任务或处理压缩状态。
