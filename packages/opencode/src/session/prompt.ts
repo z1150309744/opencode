@@ -154,6 +154,7 @@ export const layer = Layer.effect(
       return parts
     })
 
+    //在对话的第一轮用户消息发送后，异步生成一个简短的会话标题
     const title = Effect.fn("SessionPrompt.ensureTitle")(function* (input: {
       session: Session.Info
       history: MessageV2.WithParts[]
@@ -163,8 +164,10 @@ export const layer = Layer.effect(
       if (input.session.parentID) return
       if (!Session.isDefaultTitle(input.session.title)) return
 
+      //在历史中找到第一条真实用户消息的索引。如果找不到（比如所有 user 消息都是纯 synthetic 的，由系统注入），不生成标题
       const real = (m: MessageV2.WithParts) =>
         m.info.role === "user" && !m.parts.every((p) => "synthetic" in p && p.synthetic)
+      //只在恰好有一条真实用户消息时才生成标题
       const idx = input.history.findIndex(real)
       if (idx === -1) return
       if (input.history.filter(real).length !== 1) return
@@ -174,6 +177,8 @@ export const layer = Layer.effect(
       if (!firstUser || firstUser.info.role !== "user") return
       const firstInfo = firstUser.info
 
+      //检查第一条用户消息是否只包含 subtask part（没有文本输入）。这种情况发生在用户通过命令系统（如 /command）触发了
+      //   subtask，没有手动输入文本。此时标题生成需要从 subtask 的 prompt 中提取内容，而非从消息的文本 part 中
       const subtasks = firstUser.parts.filter((p): p is MessageV2.SubtaskPart => p.type === "subtask")
       const onlySubtasks = subtasks.length > 0 && firstUser.parts.every((p) => p.type === "subtask")
 
@@ -199,9 +204,10 @@ export const layer = Layer.effect(
           messages: [{ role: "user", content: "Generate a title for this conversation:\n" }, ...msgs],
         })
         .pipe(
+          //只保留 text-delta 事件（流式文本片段），过滤掉 usage、finish 等其他事件
           Stream.filter((e): e is Extract<LLM.Event, { type: "text-delta" }> => e.type === "text-delta"),
-          Stream.map((e) => e.text),
-          Stream.mkString,
+          Stream.map((e) => e.text),//提取每个 delta 的文本内容
+          Stream.mkString,//拼接所有 delta 为完整字符串
           Effect.orDie,
         )
       const cleaned = text
@@ -216,12 +222,17 @@ export const layer = Layer.effect(
         .pipe(Effect.catchCause((cause) => elog.error("failed to generate title", { error: Cause.squash(cause) })))
     })
 
+    //   为什么需要实验
+    //   1. 计划易丢失：计划只存在于对话上下文中。一旦上下文被压缩（compaction），计划细节可能被摘要掉，build agent 看不到完整计划。
+    //   2. 缺乏结构化交接：从 plan 到 build 的切换只靠一段提示词"你现在可以动手了"，但 build agent
+    //   并不知道计划的具体内容在哪——它只能从冗长的对话历史中自己翻找。
+    //   3. 无用户确认门控：用户必须手动切换 agent，没有一个显式的"计划完成，是否批准执行？"的交互点。
+    //   4. 工作流不规范：没有指导 plan agent 该如何系统性地做规划（先探索、再设计、再审查），导致不同情况下规划质量不稳定。
     const insertReminders = Effect.fn("SessionPrompt.insertReminders")(function* (input: {
       messages: MessageV2.WithParts[]
       agent: Agent.Info
       session: Session.Info
     }) {
-      // TODO zouwenwen.5 压缩后，找到的第一个user会不会是压缩信息的那个
       const userMessage = input.messages.findLast((msg) => msg.info.role === "user")
       if (!userMessage) return input.messages
 
@@ -236,6 +247,8 @@ export const layer = Layer.effect(
             synthetic: true,
           })
         }
+        //检查历史消息中是否存在由 plan agent 生成的 assistant 消息。如果有（说明之前做过规划），
+        // 且当前切换到了 build agent，则注入 BUILD_SWITCH 提示词
         const wasPlan = input.messages.some((msg) => msg.info.role === "assistant" && msg.info.agent === "plan")
         if (wasPlan && input.agent.name === "build") {
           userMessage.parts.push({
@@ -251,9 +264,11 @@ export const layer = Layer.effect(
       }
 
       const assistantMessage = input.messages.findLast((msg) => msg.info.role === "assistant")
+      //从 plan 切换到非 plan agent（如 build）
       if (input.agent.name !== "plan" && assistantMessage?.info.agent === "plan") {
-        const plan = Session.plan(input.session)
-        if (!(yield* fsys.existsSafe(plan))) return input.messages
+        const plan = Session.plan(input.session)//获取计划文件路径
+        if (!(yield* fsys.existsSafe(plan))) return input.messages//如果计划文件不存在，说明 plan agent 没有产出有效计划，直接返回
+        //如果存在，注入提示词告诉 LLM "有一个计划文件在 ${plan}，你应该按其中定义的计划执行"
         const part = yield* sessions.updatePart({
           id: PartID.ascending(),
           messageID: userMessage.info.id,
@@ -268,9 +283,10 @@ export const layer = Layer.effect(
 
       if (input.agent.name !== "plan" || assistantMessage?.info.agent === "plan") return input.messages
 
+      //首次进入 plan 模式
       const plan = Session.plan(input.session)
       const exists = yield* fsys.existsSafe(plan)
-      if (!exists) yield* fsys.ensureDir(path.dirname(plan)).pipe(Effect.catch(Effect.die))
+      if (!exists) yield* fsys.ensureDir(path.dirname(plan)).pipe(Effect.catch(Effect.die))//确保其父目录已创建
       const part = yield* sessions.updatePart({
         id: PartID.ascending(),
         messageID: userMessage.info.id,
@@ -524,12 +540,12 @@ ${exists ? `计划文件已存在于 ${plan}。你可以阅读它并使用 edit 
     })
 
     const handleSubtask = Effect.fn("SessionPrompt.handleSubtask")(function* (input: {
-      task: MessageV2.SubtaskPart
-      model: Provider.Model
-      lastUser: MessageV2.User
-      sessionID: SessionID
-      session: Session.Info
-      msgs: MessageV2.WithParts[]
+      task: MessageV2.SubtaskPart //从消息 parts 中取出的 subtask 定义
+      model: Provider.Model//当前会话的默认模型
+      lastUser: MessageV2.User//最近一条用户消息的 info
+      sessionID: SessionID//当前会话 ID
+      session: Session.Info//当前会话完整信息
+      msgs: MessageV2.WithParts[]//当前有效的消息历史
     }) {
       const { task, model, lastUser, sessionID, session, msgs } = input
       const ctx = yield* InstanceState.context
@@ -1345,6 +1361,7 @@ ${exists ? `计划文件已存在于 ${plan}。你可以阅读它并使用 edit 
 
           if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
 
+          //上面 lastAssistant 只存了 info（元数据），这里通过 findLast 拿到完整的 MessageV2.WithParts（包含parts）
           const lastAssistantMsg = msgs.findLast(
             (msg) => msg.info.role === "assistant" && msg.info.id === lastAssistant?.id,
           )
@@ -1377,6 +1394,7 @@ ${exists ? `计划文件已存在于 ${plan}。你可以阅读它并使用 edit 
           const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID)
           const task = tasks.pop()
 
+          // TODO zouwenwen.5 触发
           if (task?.type === "subtask") {
             yield* handleSubtask({ task, model, lastUser, sessionID, session, msgs })
             continue
@@ -1413,7 +1431,9 @@ ${exists ? `计划文件已存在于 ${plan}。你可以阅读它并使用 edit 
           }
           const maxSteps = agent.steps ?? Infinity
           const isLastStep = step >= maxSteps
-          msgs = yield* insertReminders({ messages: msgs, agent, session }) //本质上是一个模式感知的提示词注入器。它根据 agent 类型（plan vs build）和历史消息中的 agent 切换情况，在用户消息尾部追加 synthetic part，从而控制 LLM在不同阶段的行为边界——规划阶段只规划不动手，执行阶段按计划动手
+          //本质上是一个模式感知的提示词注入器。它根据 agent 类型（plan vs build）和历史消息中的 agent 切换情况，
+          // 在用户消息尾部追加 synthetic part，从而控制 LLM在不同阶段的行为边界——规划阶段只规划不动手，执行阶段按计划动手
+          msgs = yield* insertReminders({ messages: msgs, agent, session })
 
           const msg: MessageV2.Assistant = {
             id: MessageID.ascending(),
@@ -1441,6 +1461,7 @@ ${exists ? `计划文件已存在于 ${plan}。你可以阅读它并使用 edit 
             const lastUserMsg = msgs.findLast((m) => m.info.role === "user")
             const bypassAgentCheck = lastUserMsg?.parts.some((p) => p.type === "agent") ?? false
 
+            //调用 resolveTools 解析并注册当前 agent 可用的所有工具（内置工具 + MCP 工具）
             const tools = yield* resolveTools({
               agent,
               session,
@@ -1461,7 +1482,7 @@ ${exists ? `计划文件已存在于 ${plan}。你可以阅读它并使用 edit 
             }
 
             if (step === 1)
-              // SessionSummary.summarize 更新"这个会话到目前为止改了哪些文件"的统计，同时记录"这条用户消息引发了哪些文件变更"
+              //更新"这个会话到目前为止改了哪些文件"的统计，同时记录"这条用户消息引发了哪些文件变更"
               yield* summary.summarize({ sessionID, messageID: lastUser.id }).pipe(Effect.ignore, Effect.forkIn(scope))
 
             if (step > 1 && lastFinished) { //在多步骤（multi-step）对话中，将用户在 agent 工作期间插入的"中途消息"包裹进<system-reminder> 标签，以引导模型正确处理这些消息

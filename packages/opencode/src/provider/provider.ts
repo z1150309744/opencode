@@ -978,7 +978,7 @@ export function defaultModelIDs<T extends { models: Record<string, { id: string 
 export interface Interface {
   readonly list: () => Effect.Effect<Record<ProviderID, Info>>
   readonly getProvider: (providerID: ProviderID) => Effect.Effect<Info>
-  readonly getModel: (providerID: ProviderID, modelID: ModelID) => Effect.Effect<Model>
+  readonly getModel: (providerID: ProviderID, modelID: ModelID) => Effect.Effect<Model>//Provider.getModel
   readonly getLanguage: (model: Model) => Effect.Effect<LanguageModelV3>
   readonly closest: (
     providerID: ProviderID,
