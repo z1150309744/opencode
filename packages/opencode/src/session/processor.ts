@@ -129,7 +129,6 @@ export const layer: Layer.Layer<
       let aborted = false
       const slog = log.clone().tag("session.id", input.sessionID).tag("messageID", input.assistantMessage.id)
 
-      // 将任意错误标准化为 MessageV2 的错误格式。它会捕获 provider 信息和是否主动中止的状态，用于后续的错误分类（比如区分上下文溢出、API 错误、中止等不同情况）
       const parse = (e: unknown) =>
         MessageV2.fromError(e, {
           providerID: input.model.providerID,
@@ -552,7 +551,9 @@ export const layer: Layer.Layer<
 
       const process = Effect.fn("SessionProcessor.process")(function* (streamInput: LLM.StreamInput) {
         slog.info("process")
-        ctx.needsCompaction = false //process 可能在同一个 Handle 生命周期内被多次调用（外层 loop 驱动），每次进入时都要清除上一轮的压缩信号，避免误判
+        //process 可能在同一个 Handle 生命周期内被多次调用（外层 loop 驱动），每次进入时都要清除上一轮的压缩信号，避免误判
+        ctx.needsCompaction = false
+        //读取配置，决定"当权限被拒绝时是否终止循环"
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
 
         return yield* Effect.gen(function* () {
@@ -580,14 +581,19 @@ export const layer: Layer.Layer<
                 }
               }),
             ),
-            //这确保了：中断 = 不重试直接终止；异常 = 进入重试策略
+            //确保了：中断 = 不重试、直接终止；异常 = 可重试、可恢复
             Effect.catchCauseIf(
-              (cause) => !Cause.hasInterruptsOnly(cause),//如果 cause 仅包含中断（hasInterruptsOnly 为 true）→ 谓词返回 false → 不捕获，让中断信号继续向上传播
-              (cause) => Effect.fail(Cause.squash(cause)),//如果 cause 包含真正的异常（可能混合中断）→ 谓词返回 true → 用 Cause.squash 将复合 cause 压扁为单个错误，转为普通 Effect.fail，使其可以被下面的 retry 和 catch 处理
+              // 如果 cause 仅包含中断信号，返回 false → 不捕获，让中断继续向上传播（最终触发 fiber 终止）
+              (cause) => !Cause.hasInterruptsOnly(cause),
+              // 如果 cause 包含真正的异常（可能混合了中断），返回 true → 捕获，用 Cause.squash(cause) 将复合 Cause 压扁为单个错误，转为
+              //   Effect.fail，使其能进入下面的 retry 和 catch 流程
+              (cause) => Effect.fail(Cause.squash(cause)),
             ),
             Effect.retry(
               SessionRetry.policy({
+                //将错误标准化为 MessageV2 错误格式，用于判断错误是否可重试（例如 429 rate limit 可重试，401 auth 错误不可重试）
                 parse,
+                //每次重试前更新会话状态为 { type: "retry", attempt, message, next }，这样 UI 可以显示"正在重试..."的状态
                 set: (info) =>
                   status.set(ctx.sessionID, {
                     type: "retry",
@@ -604,6 +610,7 @@ export const layer: Layer.Layer<
           )
 
           if (ctx.needsCompaction) return "compact"
+          //果用户拒绝了权限请求导致 blocked = true
           if (ctx.blocked || ctx.assistantMessage.error) return "stop"
           return "continue"
         })

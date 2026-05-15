@@ -168,8 +168,8 @@ export const layer: Layer.Layer<
       }
     })
 
-    // goes backwards through parts until there are PRUNE_PROTECT tokens worth of tool
-    // calls, then erases output of older tool calls to free context space
+    // 渐进式上下文瘦身策略：不删除消息本身（保持对话完整性），只标记旧工具输出为"已压缩"，让序列化层在构建 LLM
+    //   输入时跳过这些输出的详细内容
     const prune = Effect.fn("SessionCompaction.prune")(function* (input: { sessionID: SessionID }) {
       const cfg = yield* config.get()
       if (!cfg.compaction?.prune) return
@@ -195,8 +195,9 @@ export const layer: Layer.Layer<
           if (part.type === "tool")
             if (part.state.status === "completed") {
               if (PRUNE_PROTECTED_TOOLS.includes(part.tool)) continue
-              if (part.state.time.compacted) break loop //如果这个 part 已经被标记过 compacted（之前修剪过），说明再往前的内容也已经被处理过了，直接跳出整个循环。这保证不会重复修剪
-              const estimate = Token.estimate(part.state.output) //用 Token.estimate 估算这个工具输出的 token 数。这是一个近似计算（通常按字符数除以某个系数）
+              //如果这个 part 的 time.compacted 已经有值，说明它在之前的某次 prune中已经被标记过了。再往前的内容也一定已经被处理过
+              if (part.state.time.compacted) break loop
+              const estimate = Token.estimate(part.state.output)
               total += estimate
               if (total > PRUNE_PROTECT) {
                 pruned += estimate
@@ -207,9 +208,11 @@ export const layer: Layer.Layer<
       }
 
       log.info("found", { pruned, total })
-      if (pruned > PRUNE_MINIMUM) { //只有当可修剪的量超过 20000 tokens 时才值得执行修剪操作。如果只有很少的内容可以清理，修剪带来的收益不足，跳过
+      if (pruned > PRUNE_MINIMUM) {
         for (const part of toPrune) {
           if (part.state.status === "completed") {
+            //设置这个时间戳后，后续 MessageV2.toModelMessagesEffect 在序列化消息给 LLM
+            //   时，会识别到这个标记并跳过该工具的完整输出（或用占位符替代），从而减少上下文占用
             part.state.time.compacted = Date.now()
             yield* session.updatePart(part)
           }

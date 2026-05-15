@@ -1482,11 +1482,11 @@ ${exists ? `计划文件已存在于 ${plan}。你可以阅读它并使用 edit 
             }
 
             if (step === 1)
-              //更新"这个会话到目前为止改了哪些文件"的统计，同时记录"这条用户消息引发了哪些文件变更"
+              //统计"这个会话到目前为止改了哪些文件"，并记录当前用户消息引发的文件变更
               yield* summary.summarize({ sessionID, messageID: lastUser.id }).pipe(Effect.ignore, Effect.forkIn(scope))
 
-            if (step > 1 && lastFinished) { //在多步骤（multi-step）对话中，将用户在 agent 工作期间插入的"中途消息"包裹进<system-reminder> 标签，以引导模型正确处理这些消息
-              // TODO zouwenwen.5 怎么实现的，最后会成什么样给到大模型
+            // 处理中途插入补充信息的场景
+            if (step > 1 && lastFinished) {
               for (const m of msgs) {
                 if (m.info.role !== "user" || m.info.id <= lastFinished.id) continue
                 for (const p of m.parts) {
@@ -1507,16 +1507,18 @@ ${exists ? `计划文件已存在于 ${plan}。你可以阅读它并使用 edit 
             yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
 
             const [skills, env, instructions, modelMsgs] = yield* Effect.all([
+              //生成当前 agent 可用的 skills 提示词
               sys.skills(agent),
-              Effect.sync(() => sys.environment(model)), //生成运行环境信息：当前使用的模型名/ID、工作目录、workspace 根目录、是否是 git 仓库、操作系统平台、当前日期。放在 <env>标签内。这让模型了解自己的执行环境上下文
-              // 加载用户自定义的 system 指令文件
-              // 本地文件：通过 systemPaths() 搜索 AGENTS.md / CLAUDE.md 等文件，从项目目录和全局配置目录中查找（findUp 从当前目录向上搜索到 workspace 根）
-              // - 远程 URL：配置中的 http/https 指令地址，通过 HTTP 拉取
+              //生成运行环境信息（模型名、工作目录、OS、日期等）
+              Effect.sync(() => sys.environment(model)),
+              // 加载用户自定义系统指令（CLAUDE.md、AGENTS.md 等）
               instruction.system().pipe(Effect.orDie),
+              //将内部消息格式转换为 AI SDK 的模型消息格式
               MessageV2.toModelMessagesEffect(msgs, model),
             ])
             const system = [...env, ...(skills ? [skills] : []), ...instructions]
             const format = lastUser.format ?? { type: "text" as const }
+            // TODO zouwenwen.5 看看是如何实现自定义输出格式的
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
             const result = yield* handle.process({
               user: lastUser,
@@ -1538,6 +1540,8 @@ ${exists ? `计划文件已存在于 ${plan}。你可以阅读它并使用 edit 
               return "break" as const
             }
 
+            //检查模型是否已"完成"（有 finish 标记且不是 tool-calls/unknown）。
+            // 如果完成了但在 json_schema模式下没有产生结构化输出，标记为错误并跳出循环。
             const finished = handle.message.finish && !["tool-calls", "unknown"].includes(handle.message.finish)
             if (finished && !handle.message.error) {
               if (format.type === "json_schema") {

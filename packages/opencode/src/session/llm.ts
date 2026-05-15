@@ -110,27 +110,29 @@ const live: Layer.Layer<
         providerID: input.model.providerID,
       })
 
-      const [language, cfg, item, info] = yield* Effect.all(  //将多个 Effect 组合成一个 Effect，并行或顺序执行它们，返回所有结果的集合
+      const [language, cfg, item, info] = yield* Effect.all(
         [
-          provider.getLanguage(input.model),//AI SDK 的 LanguageModel 实例，是实际发 HTTP 请求的对象
-          config.get(),
-          provider.getProvider(input.model.providerID), //Provider 元数据（id、options、litellmProxy 等）
+          provider.getLanguage(input.model),//AI SDK 的 LanguageModelV3 实例，是实际发 HTTP 请求的对象
+          config.get(),//读取当前合并后的配置对象（全局 + 项目 + 环境变量）
+          provider.getProvider(input.model.providerID), //包含provider 的 id、source、env、options（SDK 工厂参数如 baseURL、litellmProxy 标记等）、models
           auth.get(input.model.providerID), //该 provider 的认证信息（类型：oauth / api-key / none）
         ],
-        { concurrency: "unbounded" }, //并行执行所有 effect
+        { concurrency: "unbounded" },
       )
 
       // TODO: 移到合适的 hook 中处理
+      // OpenAI OAuth 路径使用 Responses API，该 API 的 system prompt
+      // 通过 instructions 字段传递而非 messages 数组中的 system role 消息
       const isOpenaiOauth = item.id === "openai" && info?.type === "oauth"
 
       const system: string[] = []
       system.push(
         [
-          // 优先使用 agent prompt，否则使用 provider prompt
+          // 优先使用 agent prompt（自定义提示），否则使用 provider prompt
           ...(input.agent.prompt ? [input.agent.prompt] : SystemPrompt.provider(input.model)),
-          // 本次调用传入的自定义 prompt
+          //来自 processor 注入的环境信息、skills 描述等
           ...input.system,
-          // 来自最后一条用户消息的自定义 prompt
+          //用户消息中携带的自定义 system prompt
           ...(input.user.system ? [input.user.system] : []),
         ]
           .filter((x) => x)
@@ -150,16 +152,13 @@ const live: Layer.Layer<
         system.push(header, rest.join("\n"))
       }
 
-      //非 small 模式下，如果用户指定了变体名（如 "thinking"），从模型预定义的 variants
-      //映射中取出该变体的选项对象。否则为空对象，不产生任何覆盖。
+      //非 small 模式下，如果用户消息指定了变体名（如 "high"、"max"），从模型预定义的 variants 映射中取出对应的配置对象
       const variant =
         !input.small && input.model.variants && input.user.model.variant
           ? input.model.variants[input.user.model.variant]
           : {}
       const base = input.small
-        //small 模式（摘要、标题生成）：调用 smallOptions，产出精简配置（通常只保留必要字段，降低 token 消耗）
         ? ProviderTransform.smallOptions(input.model)
-        //调用 options，基于 provider 元数据（item.options）生成完整配置，包含缓存策略、session affinity 等 provider级别参数
         : ProviderTransform.options({
             model: input.model,
             sessionID: input.sessionID,
@@ -167,25 +166,19 @@ const live: Layer.Layer<
           })
       const options: Record<string, any> = pipe(
         base,//provider 通用默认值（如 Anthropic 的 cacheControl、maxTokens 等）
-        mergeDeep(input.model.options),//模型级配置（某个具体模型的特殊参数，如 Claude Opus 独有的选项）
-        mergeDeep(input.agent.options),//agent 级配置（如 coder agent 可能需要更大的输出限制）
-        mergeDeep(variant),//用户选择的变体覆盖（如 thinking 模式加大 budgetTokens）
+        mergeDeep(input.model.options),//models.dev 或opencode.json 中该模型的特殊参数
+        mergeDeep(input.agent.options),//agent 配置中的覆盖
+        mergeDeep(variant),//用户选择的推理变体覆盖）。后者覆盖前者的同名字段
       )
       if (isOpenaiOauth) {//OpenAI OAuth 模式下，system prompt 走 instructions 字段而非 messages
         options.instructions = system.join("\n")
       }
 
       /**
-       *   三条路径：
-       *
-       *   ┌───────────────────┬────────────────────────┬───────────────────────────────────────────────────────────┐
-       *   │       条件        │   messages 构造方式    │                           原因                            │
-       *   ├───────────────────┼────────────────────────┼───────────────────────────────────────────────────────────┤
-       *   │ OpenAI OAuth      │ 直接用 input.messages  │ system 已放入 options.instructions                        │
-       *   ├───────────────────┼────────────────────────┼───────────────────────────────────────────────────────────┤
-       *   │ GitLab Workflow   │ 直接用 input.messages  │ system 通过 workflowModel.systemPrompt 单独传递           │
-       *   ├───────────────────┼────────────────────────┼───────────────────────────────────────────────────────────┤
-       *   │ 其他所有 provider │ system 消息 + 历史消息 │ 标准的 [{role:"system",...}, {role:"user",...}, ...] 格式
+       *  三条路径：
+       *  1.OpenAI OAuth：system 已放入 options.instructions，messages 直接使用历史消息
+       *  2.GitLab Workflow：system 通过后面的 workflowModel.systemPrompt 属性传递，messages 直接使用
+       *  3.将 system 数组中的每个字符串转为 {role: "system", content: x} 消息，拼在历史消息前面
        */
       const isWorkflow = language instanceof GitLabWorkflowLanguageModel
       const messages = isOpenaiOauth
@@ -238,7 +231,7 @@ const live: Layer.Layer<
         },
       )
 
-      const tools = resolveTools(input)//根据权限规则和用户覆盖过滤可用工具列表
+      const tools = resolveTools(input)
 
       //当对话历史（input.messages）中包含工具调用记录（tool-call 或 tool-result），但当前轮次的可用工具列表为空时，某些 API
       //   代理（LiteLLM、GitHub Copilot）会校验失败——它们要求：如果消息中出现了工具调用内容，请求的 tools 字段就不能为空数组。
@@ -253,7 +246,7 @@ const live: Layer.Layer<
         hasToolCalls(input.messages)
       ) {
         tools["_noop"] = tool({
-          description: "Do not call this tool. It exists only for API compatibility and must never be invoked.",
+          description: "不要使用此工具。此工具仅用于满足 API 的兼容性要求，切勿调用它。",
           inputSchema: jsonSchema({
             type: "object",
             properties: {
@@ -350,10 +343,6 @@ const live: Layer.Layer<
         })
       }
 
-      /**如果启用了 OpenTelemetry，用 Proxy 包装 tracer，拦截 startSpan 方法——
-       * 在每个 span 创建时自动注入 session.id 属性。Effect.serviceOption 尝试获取可选服务，
-       * 不存在时返回 Option.None而非报错。
-      */
       const tracer = cfg.experimental?.openTelemetry
         ? Option.getOrUndefined(yield* Effect.serviceOption(OtelTracer.OtelTracer))
         : undefined
@@ -378,8 +367,8 @@ const live: Layer.Layer<
         },
         /**
          * 当模型输出的工具调用名在 tools 映射表中找不到时触发的修复逻辑
-         *   - 尝试小写化匹配（ReadFile → readfile）
-         *   - 如果仍无法匹配，将调用重定向到名为 invalid 的工具，并把原始工具名和错误信息作为参数传入，让 agent 知道调用失败了
+         *   - 先尝试小写化匹配（ReadFile → readfile）
+         *   - 仍然失败则重定向到名为 invalid 的工具，把原始工具名和错误信息作为参数传入，让 agent 知道调用失败并能自行修正
          */
         async experimental_repairToolCall(failed) {
           const lower = failed.toolCall.toolName.toLowerCase()
@@ -406,9 +395,9 @@ const live: Layer.Layer<
         topP: params.topP, //核采样（nucleus sampling），只从累计概率前 P% 的 token 中选择
         topK: params.topK, //只从概率最高的前 K 个 token 中选择
         providerOptions: ProviderTransform.providerOptions(input.model, params.options), //provider 特有的扩展参数。例如 Anthropic 的 cacheControl、budgetTokens（thinking 模式）等
-        activeTools: Object.keys(tools).filter((x) => x !== "invalid"), //告诉模型当前轮次可以调用哪些工具
+        activeTools: Object.keys(tools).filter((x) => x !== "invalid"), //当前可用工具列表
         tools, //完整的工具定义映射表（toolName → Tool），包含每个工具的 schema 和 execute 函数
-        toolChoice: input.toolChoice, //控制模型是否必须调用工具
+        toolChoice: input.toolChoice, //控制工具调用策略："auto" 由模型决定，"required" 强制调用（用于 JSON 结构化输出），"none" 禁止
         maxOutputTokens: params.maxOutputTokens,
         abortSignal: input.abort, //传入 AbortController.signal，允许外部取消正在进行的 HTTP 请求
         headers: {
@@ -424,8 +413,8 @@ const live: Layer.Layer<
                 ...(input.parentSessionID ? { "x-parent-session-id": input.parentSessionID } : {}),
                 "User-Agent": `opencode/${InstallationVersion}`,
               }),
-          ...input.model.headers,
-          ...headers,
+          ...input.model.headers,//叠加模型级别自定义头
+          ...headers,//插件注入的头
         },
         maxRetries: input.retries ?? 0,
         messages,
@@ -457,26 +446,25 @@ const live: Layer.Layer<
     })
 
     /**
-     *   stream(input) 被调用
-     *     → Scope 创建（Stream.scoped）
-     *       → AbortController 创建并注册 finalizer（acquireRelease）
-     *         → run() 执行：构造 system prompt、解析 provider options、调用 streamText 建立连接
-     *           → fullStream 被适配为 Effect Stream，逐个 yield 事件（text-delta、tool-call 等）
-     *     → 流结束时 Scope 关闭 → ctrl.abort() 被调用 → 底层 HTTP 请求被取消
      * @param input LLM.stream实现
      */
     const stream: Interface["stream"] = (input) =>
-      Stream.scoped(//将一个需要 Scope 的 Stream 转换为不需要 Scope 的 Stream。它会自动创建一个 Scope，在流结束（正常完成、出错、或被中断）时执行 scope 内注册的所有 finalizer
-        Stream.unwrap(//Stream.unwrap 接收一个 Effect<Stream<A, E>> 并将其"展开"为 Stream<A, E>
+      //将一个依赖 Scope 的 Stream 提升为自包含的 Stream
+      //内部的 Effect.acquireRelease 需要一个 Scope 来注册资源释放器。Stream.scoped 为整个 Stream 生命周期提供这个
+      //Scope——当 Stream 被消费完毕、出错或被中断时，Scope 关闭，触发所有注册的释放器（即 ctrl.abort()）
+      Stream.scoped(
+        //签名是 Effect<Stream<A, E>> => Stream<A, E>。它将一个"返回 Stream 的 Effect"展平为一个"Stream"
+        Stream.unwrap(
           Effect.gen(function* () {
             const ctrl = yield* Effect.acquireRelease(
               // TODO zouwenwen.5 AbortController设计原理
               Effect.sync(() => new AbortController()),
+              //当 Scope 关闭时，调用 ctrl.abort()，向 AI SDK 的底层HTTP 请求发送中止信号
               (ctrl) => Effect.sync(() => ctrl.abort()),
             )
 
             const result = yield* run({ ...input, abort: ctrl.signal })
-
+            //将 AI SDK 的 fullStream（一个 AsyncIterable<Event>）转换为 Effect-TS 的 Stream<Event, Error>
             return Stream.fromAsyncIterable(result.fullStream, (e) => (e instanceof Error ? e : new Error(String(e))))
           }),
         ),
