@@ -485,9 +485,12 @@ export const defaultLayer = Layer.suspend(() =>
   ),
 )
 
+// 三层工具过滤机制——agent权限、会话权限、用户消息覆盖，三者共同决定最终哪些工具对模型可见
 function resolveTools(input: Pick<StreamInput, "tools" | "agent" | "permission" | "user">) {
+
   const disabled = Permission.disabled(
     Object.keys(input.tools),
+    // 将 agent级权限规则（input.agent.permission）与会话级权限规则（input.permission）合并为一个统一的ruleset
     Permission.merge(input.agent.permission, input.permission ?? []),
   )
   return Record.filter(input.tools, (_, k) => input.user.tools?.[k] !== false && !disabled.has(k))

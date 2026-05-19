@@ -218,7 +218,7 @@ export const layer: Layer.Layer<
       })
 
       const handleEvent = Effect.fnUntraced(function* (value: StreamEvent) {
-        // log.info(`[custom stream Event] ${JSON.stringify(value, null, 2)}`)
+        log.info(`[custom stream Event] ${JSON.stringify(value, null, 2)}`)
         switch (value.type) {
           case "start":
             yield* status.set(ctx.sessionID, { type: "busy" })
@@ -226,6 +226,9 @@ export const layer: Layer.Layer<
 
           case "reasoning-start":
             if (value.id in ctx.reasoningMap) return
+            //通过ctx.reasoningMap 按 ID 索引管理多个并行的推理块，为什么存在多个推理块
+            //当 LLM 返回tool-calls 作为 finish reason 时，SDK 自动执行工具并将结果喂回模型，触发下一个
+            //step——这一切发生在同一个 stream 内
             ctx.reasoningMap[value.id] = {
               id: PartID.ascending(),
               messageID: ctx.assistantMessage.id,
@@ -262,6 +265,7 @@ export const layer: Layer.Layer<
             return
 
           case "tool-input-start":
+            //创建一个 pending 状态的 ToolPart，同时创建一个 Deferred 用于异步等待工具执行完成
             if (ctx.assistantMessage.summary) {
               throw new Error(`Tool call not allowed while generating summary: ${value.toolName}`)
             }
@@ -293,6 +297,7 @@ export const layer: Layer.Layer<
             if (ctx.assistantMessage.summary) {
               throw new Error(`Tool call not allowed while generating summary: ${value.toolName}`)
             }
+            //将工具状态更新为 running
             yield* updateToolCall(value.toolCallId, (match) => ({
               ...match,
               tool: value.toolName,
@@ -307,6 +312,8 @@ export const layer: Layer.Layer<
                 : value.providerMetadata,
             }))
 
+            //并执行 doom loop 检测——如果最近 3 次工具调用的名称和输入完全相同，
+            //触发 permission.ask让用户决定是否继续（防止 LLM 陷入重复调用死循环）
             const parts = MessageV2.parts(ctx.assistantMessage.id)
             const recentParts = parts.slice(-DOOM_LOOP_THRESHOLD)
 
@@ -349,6 +356,7 @@ export const layer: Layer.Layer<
             throw value.error
 
           case "start-step":
+            //捕获文件快照（用于之后生成 diff patch）
             if (!ctx.snapshot) ctx.snapshot = yield* snapshot.track()
             yield* session.updatePart({
               id: PartID.ascending(),
@@ -360,6 +368,8 @@ export const layer: Layer.Layer<
             return
 
           case "finish-step": {
+            //计算本轮 token 用量和费用、生成文件变更 patch、触发摘要生成、检测
+            //token 溢出（设置 needsCompaction = true，使外层循环进入压缩流程）
             const usage = Session.getUsage({
               model: ctx.model,
               usage: value.usage,
@@ -425,6 +435,7 @@ export const layer: Layer.Layer<
             if (!ctx.currentText) return
             ctx.currentText.text += value.text
             if (value.providerMetadata) ctx.currentText.metadata = value.providerMetadata
+            //仅发布 Bus 事件不写库
             yield* session.updatePartDelta({
               sessionID: ctx.currentText.sessionID,
               messageID: ctx.currentText.messageID,

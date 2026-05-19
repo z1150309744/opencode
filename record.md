@@ -1,6 +1,8 @@
 ~/.local/share/opencode/opencode-local.db
 bun run --cwd packages/app dev
 
+~/.local/share/opencode/log/dev.log
+
 
 - ~/.local/share/opencode/ — 数据库、认证信息、快照、日志
 - ~/.cache/opencode/ — 模型缓存、二进制工具
